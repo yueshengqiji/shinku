@@ -1071,7 +1071,12 @@ class C2_1BoundaryTests(unittest.TestCase):
     def test_the_new_packages_aggregate_their_own_slice_only(self) -> None:
         llm = importlib.import_module("shinku.llm")
         text = importlib.import_module("shinku.text")
-        self.assertEqual(set(llm.__all__), {"LlmCircuitBreaker", "get_llm_circuit_breaker"})
+        # C2-1 落地时 shinku.llm 只有熔断器两项；C2-2 把传输客户端并入本包后
+        # __all__ 扩到四项（断言随批次更新，C2-1 台账记的是当时的两项）。
+        self.assertEqual(set(llm.__all__), {
+            "LlmCircuitBreaker", "get_llm_circuit_breaker",
+            "AnthropicCompatClient", "build_llm_client",
+        })
         self.assertEqual(set(text.__all__),
                          {"STOPWORDS", "TOKEN_RE", "normalize_text", "tokenize"})
         # providers 是从 C1-4 的扁平模块迁过来的，__all__ 保持兼容面不扩大。
