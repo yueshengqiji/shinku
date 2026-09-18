@@ -166,22 +166,89 @@
 `load_manifest` 对非 UTF-8 文件会逃逸 `UnicodeDecodeError`；BGM 条目的名称回退走
 `EMOTION_LABELS` 而非「无标签表」。两者都在测试里被钉住。
 
+#### 4.2.4 C1-4 公共守卫、证据门、供应商词汇与原生工具 schema —— 洁净室重写
+
+来源侧四个模块都含逻辑、分支或数据处理，因此**不是**契约事实迁移。登记写法
+「契约=`<契约文档>`｜实现独立」。计划登记的四个模块合计 **17,651 字节**；本批**只有这一个口径**
+——没有随行的传递依赖，也没有转发壳要消解。计划值与本批实测值同为 **17,651**。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/guards/public_think.py` | 2026-09-18 | **洁净室重写** | `companion_v01/public_guard.py`（3,024 B） | 契约 `docs/contracts/c1_4_guards_provider_tool_schema.md` §2；表达层：Shinku 撰写（按领域改置 `guards/` 并去掉 `guard` 后缀；内部状态命名、跨日滚动的拆分、消息兜底都重写；`_day`／`_reset_if_new_day`／`_active_thinks`／`_used_today`／`_day_key`／`_timezone`／`_lock` 七个旧私有名零命中） |
+| `src/shinku/guards/evidence.py` | 2026-09-18 | **洁净室重写** | `companion_v01/evidence_guard.py`（5,693 B） | 同上 §3；表达层：Shinku 撰写。**实现写法彻底更换**：旧版是「两个各含 8 个并列分支的超长正则 + 一个切分正则」，新版改为**词表 + 分层查找**（先切句，再按「主语／动词／完成标记／引语头」结构化判定），文件内最长行 < 120 字符并由测试钉住。散文重叠从首版 5 处收敛到 0 处 |
+| `src/shinku/providers/config.py` | 2026-09-18 | **洁净室重写** | `companion_v01/provider_config.py`（5,525 B） | 同上 §4；表达层：Shinku 撰写（按领域改置 `providers/`；把「信号词」拆成三张**必须分开**的具名表 `_PROTOCOL_SIGNALS`／`_INFER_SIGNALS`／`_MATCH_SIGNALS` 并统一走 `_has_signal` 查表；八个函数体全部重写） |
+| `src/shinku/tools/native_schema.py` | 2026-09-18 | **洁净室重写** | `companion_v01/native_tool_schema.py`（3,409 B） | 同上 §5；表达层：Shinku 撰写（旧版 6 个私有函数改为 4 个具名辅助；`_LEGACY_MARKERS` → `_ENVELOPE_MARKERS`；句号切分由正则 `re.split` 改为手写遍历；跳过条件收进 `_admits`） |
+| `src/shinku/guards/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包标记） | 本仓库新建（仅包标记，`__all__` 为空） |
+| `src/shinku/providers/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 本仓库新建 |
+| `tests/test_contract_c1_4.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；断言对象为契约的外部可观察行为，含边界扫描与契约表达式定点断言 |
+
+**对照物判定（规矩六在本批第二次命中）：** `public_guard.py` 与 `native_tool_schema.py` 在
+Akane 侧都是**转发壳**（183 B / 1,015 B，正文只有 `from code_shared.xxx import *`），若拿它们当
+对照物，整文件比值会给出 0.0652 / 0.2941 这样的**假低值**，方向完全反。对照物一律取
+`code_shared` 的真实现。`evidence_guard.py` 在 `code_shared` **无副本**、与 Akane 侧
+**逐字节相同**（sha 均为 `6434e377080a`，C1 对账列为「T3 直连同源，A2 盲区」），对照物取 Akane 同路径。
+
+**`native_tool_schema.py` 的 T4 身份在本批核清：** C1 对账把它列为「T4 低相似（<0.50），需人工核验」。
+本批完成核验——共有方法 3 个，函数体相似度均值 **0.2879**、中位 0.3636、**≥0.80 的一个都没有**；
+旧项目 6 个方法、上游 6 个方法，**两侧各有 3 个独有方法**，是**不同功能集**。结论与 C1-3 的
+`resource_manifest` 同型：**独立的小实现，不是上游砍版本**。但它仍按洁净室重写处理
+（来源未经取证，本批补齐契约与测试），**不按「已证明独立」豁免**。
+
+而另三个的相似度都够高、够不上独立：`evidence_guard.py` 逐字节相同（5/5 方法全 1.0）、
+`provider_config.py` 8/8 方法共有且 3 个函数体逐字相同、`public_guard.py` 是同一实现的结构压缩
+（`release` 1.0 / `snapshot` 0.9）。**四个模块全部归入洁净室重写，无一豁免。**
+
+**C1-4 的合格判据不是相似度，而是「有契约文档 + 独立测试 + 实现独立」。** 五项证据：
+
+1. 契约文档 `docs/contracts/c1_4_guards_provider_tool_schema.md`（只记录外部可观察行为）；
+2. 独立测试 `tests/test_contract_c1_4.py`（**114 个用例 / 17 个测试类 / 24 个 subTest 点**）；
+3. 实现独立：旧模块的 **17 个私有名**（`public_guard` 7 + `evidence_guard` 4 +
+   `native_tool_schema` 6；`provider_config` 无私有名）在本批新文件里**零命中**，
+   用 `tokenize` 取**精确标识符 token** 比对；
+4. 散文独立：docstring + 注释、连续 ≥12 字符的逐字片段，从首版 **5 处**收敛到 **0 处**。
+   5 处全部落在 `guards/evidence.py`——本批唯一「旧实现与上游逐字节相同」的模块，
+   首版沿用了它的解释性措辞；**这是散文筛子在本批的实际战果**；
+5. **行为等价性对拍 + 变异测试（本批新增的两条证据口径，对后续洁净室重写批次通用）**：
+   - 对拍 `_c1_4_parity.py`：把旧实现与新实现放在同一批语料上逐项比返回值——
+     `public_think` **1,512 组**、`evidence` **147,825 次**、`provider_config` **953 组**、
+     `native_tool_schema` **60 组**，合计 **150,350 次比对，全部 0 差异**；
+   - 变异 `_c1_4_mutation.py`：逐个注入 **20 个典型缺陷**（`release` 允许转负、每日额度优先级反转、
+     `has_evidence` 语义反转、推断表与匹配表合并、payload 键名改 snake_case、去信封标记漏项、
+     `tool_type` 不再优先于键名、去重失效……），确认测试变红——**20 个全部被抓住，0 漏**；
+     恢复后逐文件 sha256 与初始值一致。首版有 **1 个漏**（「引语类名词必须紧跟动词」这条边界
+     未被覆盖），补一条测试句后抓住。
+
+> 第 5 项是本批对 SKILL 的贡献。相似度与散文只能证明**没有抄**；对拍证明**行为对齐**，
+> 变异证明**测试有效**。三者合起来才构成洁净室重写的完整证据链。两项脚本在协作工作区
+> （`_c1_4_parity.py` / `_c1_4_mutation.py`），后续批次可沿用。
+
+**依赖变更（本批唯一一处 `pyproject.toml` 改动）：** `guards/public_think.py` 用
+`zoneinfo.ZoneInfo` 按 `Asia/Shanghai` 做跨日判定，而 Windows 没有系统 tzdb，需要 `tzdata`。
+按项目约定（「每接入一个模块，加它需要的那一个依赖」）在 `dependencies` 里加 `tzdata`
+——与旧项目 `requirements.txt` 的无条件声明一致。干净环境原先缺 `tzdata`，
+本批就地补装（PyPI 当时不可达，从旧 venv 复制纯数据包，等价于解包 wheel）。
+
+**C1-4 未做的事：** 未装配——`PublicThinkGuard` 与证据门都没接进任何发送或请求路径，属 C4/C6；
+未接计数通道（旧 docstring 提到的 `evidence_claim_trimmed` / `provider_speculation_trimmed`
+走引擎 metric，模块本身不产生 metric）；未碰 `model_service_config.py`、`tool_runtime.py`、
+`tool_orchestration_engine.py` 等消费方。
+
 ## 5. 当前未决
 
-- **C1 剩余批次**：C1-4（`public_guard`、`evidence_guard`、`provider_config`、
-  `native_tool_schema`）——**洁净室重写**，不是契约事实迁移。
-  ~~C1-2（`request_context`、`routes/sessions`、`task_artifacts`、`tool_invocation`）~~
-  **已于 2026-09-18 完成**，见 §4.2.2。
-  ~~C1-3（`capability_adapters/manifest` + `manifest_loader`、`resource_manifest`）~~
-  **已于 2026-09-18 完成**，见 §4.2.3（含随行的 `capability_safety.py`）。
-- **C1-2 / C1-3 的装配都未做**：`CorrelationIdMiddleware` 与 sessions 路由没接进
-  `api/app.py`；`load_manifest` 没接进任何注册表，`ResourceManifest` 也没接进应用工厂。
-  两批都只产出「可被装配的工厂与类」，**没有改到运行期服务面**，
-  B1 的健康面与启动链行为不变。C1-3 因此与 C1-2 一样不做进程探针，理由记在批次记录里。
+- **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
+  洁净室重写见 §4.2.2／§4.2.3／§4.2.4。**C1 范围内已无待办模块。**
+  ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
+  **已于 2026-09-18 完成**，见 §4.2.4。
+- **C1-2 / C1-3 / C1-4 的装配都未做**：`CorrelationIdMiddleware` 与 sessions 路由没接进
+  `api/app.py`；`load_manifest` 没接进任何注册表，`ResourceManifest` 也没接进应用工厂；
+  `PublicThinkGuard` 与证据门没接进任何发送路径。三批都只产出「可被装配的工厂与类」，
+  **没有改到运行期服务面**，B1 的健康面与启动链行为不变。因此三批都不做进程探针，
+  理由记在各自的批次记录里。
 - **已纳入 C 阶段重写清单的 3 个模块**：`huggingface_provider.py`、`health.py`、
   `capability_safety.py`。
   ~~`capability_safety.py`~~ **已于 2026-09-18 在 C1-3 落地**（见 §4.2.3）；
-  其余两个归属批次待定。
+  其余两个（`huggingface_provider.py` 属 `providers/` 领域、`health.py` 属服务面）
+  **归属批次待定**。
 - **`ADMISSION.md` §4 的自动化检查**仍为欠账（import graph 扫描、文本扫描规则重写、
   台账完整性、许可证清单）。
 - 旧项目里的 36 个 `UNCONFIRMED` 与 106 个 `REWRITE_REQUIRED` 的处置方向
