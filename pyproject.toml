@@ -22,6 +22,8 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pyyaml",  # C1-3：能力提供方清单是 YAML 文件，本模块是第一个真正解析它的模块
+    "tzdata",  # C1-4：公开发言守卫按 Asia/Shanghai 做跨日判定；zoneinfo 在没有系统时区库的
+               # 平台（Windows）靠它提供 tzdb。旧项目 requirements.txt 同样是无条件声明。
 ]
 
 [project.optional-dependencies]
