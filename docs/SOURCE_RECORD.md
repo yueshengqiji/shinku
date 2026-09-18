@@ -350,12 +350,72 @@ Akane 侧存在同类实现。本批是第四种：
 
 ## 5. 当前未决
 
+#### 4.2.7 C2-2 LLM 传输客户端 —— 洁净室重写（C2 的真正前置）
+
+**为什么 C2-2 是 `llm_client` 而不是计划里的 `model_service`：** 读上游代码发现
+`code_shared/model_service.py` 第 16 行在**模块级** `from .llm_client import build_llm_client`，
+而 `build_llm_client` 的 anthropic 分支直接 `return AnthropicCompatClient(...)`——
+`llm_client.py` 388 行里约 365 行都是这个类与它的私有助手，**切片≈整份文件**。
+按「传递依赖随行」（C2-1 先例），传输层必须先落。C2 剩余批次就此重排：
+C2-3 = `model_service` + `model_service_config`（一对，必须同批）、
+C2-4 = `routes/model_services`、C2-5 = `provider_probe` + `llm_runtime`。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/llm/client.py` | 2026-09-19 | **洁净室重写** | `code_shared/llm_client.py`（上游真实现 13,660 B / 388 行） | 契约 `docs/contracts/c2_2_llm_transport.md`；表达层：Shinku 撰写（私有助手整组换名：`_convert_messages`→`_split_roles`、`_flatten_content_to_text`→`_as_plain_text`、`_convert_content_blocks`→`_as_content_blocks`、`_build_anthropic_payload`→`_prepare_request`（并抽成 `_PreparedRequest` 数据类）、`_raise_for_status`→`_reject_bad_status`、`_build_openai_style_response`→`_as_chat_completion`、`_AnthropicStream`→`_MessageEventStream`、`_capture_stream_usage`→`_absorb_usage`、`_chunk_from_sse_event`→`_event_to_chunk`、`_build_stream_chunk`→`_delta_chunk`、`_map_finish_reason`→`_canonical_finish_reason`；常量具名化：`_ANTHROPIC_API_VERSION`／`_DEFAULT_MAX_TOKENS`／`_SYSTEM_CACHE_SLOTS`／`_STOP_REASON_MAP`／`_INLINE_IMAGE_RE`／`_KEY_PLACEHOLDERS`） |
+| `src/shinku/llm/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无（包导出面） | C2-1 新建；本批扩 `__all__` 收 `AnthropicCompatClient` 与 `build_llm_client` |
+| `tests/test_contract_c2_2.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；传输层全换假件（`requests.post` 记录入参、`openai.OpenAI` 记录构造参数），不发起真实网络 |
+| `docs/contracts/c2_2_llm_transport.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；含 §0.4 三处「与 Shinku 旧侧的有意分叉」及两个决定 |
+| `pyproject.toml`（dependencies） | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本批新增 `openai` + `requests`——第一个真正碰网络传输的模块，逐项加、不整份搬旧 requirements |
+
+**对照物判定（规矩六，本批是「两侧都有」的 B 组形态）：** Akane 侧
+`services/llm_client.py` 仅 **839 B**，主体是 `from code_shared.llm_client import *`
+再加一个 `_akane_protocol` 标记——**转发壳，不能当对照物**；对照物取 `code_shared`
+真实现。Shinku 旧侧 `services/llm_client.py`（13,167 B）与上游 body 相似度仅
+**0.3115**——旧仓迁移文档写它的设计意图是「兼容包装，只保留旧导入路径与
+`_shinku_protocol` 标记」，但实测改写幅度远超设计意图（全量类型标注、私有助手整组
+改名、请求组装抽出 `_AnthropicRequest`）；**不作来源**，只进 `LEGACY_NAMES` 并集。
+
+**两处「旧侧独有物」不继承（契约 §0.4 决定 2／3）：** `client._shinku_protocol`
+兼容标记（旧仓 `llm_runtime.py` 读它 9 次——那是**消费侧兼容**，不是与上游的契约；
+上游 docstring 明说项目包装层"可以"加、非必须）与 `_build_anthropic_payload`
+私有垫片（两仓旧测试 import 它；上游那份是真实实现，属表达层）。新仓运行时
+同批重写，统一读规范属性 `protocol`。C7 复查时确认无残留消费者。
+
+**六项证据：**
+
+1. 契约文档 `docs/contracts/c2_2_llm_transport.md`（端点／请求头／请求体改写表／
+   回装结构／SSE 事件表／失败模式，§0.4 三处有意分叉各配理由）；
+2. 独立测试 `tests/test_contract_c2_2.py`（**100 个用例 / 12 个测试类 / 134 个 subtest**，
+   全程假传输层）；
+3. 实现独立：旧侧 **32 个私有名**（「对照物 ∪ Shinku 旧实现」并集，`kit.py namegap`
+   核对覆盖完整、0 缺口）在新文件里**零命中**（精确标识符 token 比对）；
+4. 散文独立：docstring + 注释、连续 ≥12 字符逐字片段 **0 处**；
+5. **行为等价性对拍 `_c2_2_parity.py`：2,212 次比对、0 处差异**。六组：`build_llm_client`
+   224 组参数网格、构造归一化 180 组、请求体改写 375 组（15 类消息 × 25 类覆盖）、
+   非流式回装 11 组、流式 SSE 8 组事件流 × 2 种 base_url、失败路径 9 组。
+   两侧传输层都换假件后比对（`requests.post` 全入参 + `openai.OpenAI` 构造参数）；
+   生成 id 的随机 uuid hex 只比「是否生成」；
+6. **变异测试：注入 32 个典型缺陷，全部被抓住、0 漏**，恢复后 sha256 与初始值一致。
+
+**依赖变更：`+openai` `+requests`。** 旧侧把 `httpx` 一并带进来的做法**不学**——
+本模块经 SDK 与直发 HTTP 实测只用到这两个。
+
+**本批未做的事：** 未装配——`build_llm_client` 当前**无消费者**（`llm_runtime` 属 C2-5，
+`model_service` 属 C2-3），属「可被装配的传输件」；未碰 `tts_client.py`
+（Akane 侧也是壳，Shinku 旧侧 11,274 B 独立改写 sim=0.4754，排期属 C6 声音链路）。
+
+## 5. 当前未决
+
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
   洁净室重写见 §4.2.2／§4.2.3／§4.2.4。**C1 范围内已无待办模块。**
   C1-5（§4.2.6）是 C1 对账清单的**收口批**，不改变上列四个子批次的登记。
-- **C2 起按依赖图切批**（2026-09-18）：C2-1 已完成（§4.2.5）。下一批 C2-2 的候选是
-  `model_service_config.py` + `model_service.py`——读代码确认两者必须同批（前者的 389 行
-  全部在委托后者），且属**传输层**，对拍时要替换 `requests`。
+- **C2 起按依赖图切批**（2026-09-18；2026-09-19 依依赖图重排）：C2-1 已完成（§4.2.5）、
+  **C2-2 已完成**（§4.2.7，`llm_client` 传输层——`model_service` 模块级依赖它，
+  anthropic 分支返回整个 `AnthropicCompatClient`，切片≈整份文件，故先行）。
+  下一步 **C2-3 = `model_service` + `model_service_config`**（一对，必须同批；
+  前者 23,836 B 上游真实现、后者是项目侧适配层），随后 C2-4 = `routes/model_services`
+  （对照物取 Akane 侧 8,014 B，上游本无路由层）、C2-5 = `provider_probe` + `llm_runtime`。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
