@@ -3,7 +3,11 @@
 本包收「模型供应商」这一域的词汇：有哪些预置、每个预置用什么协议、base_url 该怎么归一、
 一段 base_url 该判给哪个供应商。LLM client 与模型服务配置都从这里取词，避免各写一套字符串比较。
 
-后续批次（C2）会把同域的 ``huggingface_provider`` 一并放进来。
+C2-1 又把同域的两个模块放进本包：``embedding``（哈希词袋与 LRU 缓存）
+与 ``huggingface``（可选的本地句向量后端）。两者**不进本包的 ``__all__``**——
+``__all__`` 是从 C1-4 的扁平模块 ``provider_config`` 迁进来时留下的兼容面，
+再往里塞东西会把这个聚合面变成"什么都有"的口袋；
+调用方按全路径导入即可，做法同 :mod:`shinku.tools` 与 :mod:`shinku.guards`。
 """
 
 from __future__ import annotations
