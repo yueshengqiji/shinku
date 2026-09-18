@@ -21,6 +21,7 @@ classifiers = [
 dependencies = [
     "fastapi",
     "uvicorn",
+    "pyyaml",  # C1-3：能力提供方清单是 YAML 文件，本模块是第一个真正解析它的模块
 ]
 
 [project.optional-dependencies]
