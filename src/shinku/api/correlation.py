@@ -4,8 +4,8 @@
 两条约束决定了下边的写法：
 
 1. **头名是线路协议**，所以它不在本模块定义——唯一定义处在 :mod:`shinku.names`；
-2. **调用方给的值不可信**。只有形状合规的值才被采纳，其余一律换成新生成的值，
-   这样日志里永远不会出现调用方塞进来的任意内容。
+2. **调用方给的值不可信**。只有形状合规的值才被采纳，其余一律换成新生成的值——
+   于是日志里不会出现调用方随手塞进来的内容。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ _context: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 
 def _new_id() -> str:
-    """生成一个新的关联 ID：32 位小写十六进制，无连字符。"""
+    """新造一个关联 ID：32 位、小写十六进制、无连字符。"""
 
     return uuid.uuid4().hex
 
@@ -49,20 +49,20 @@ def _is_adoptable(candidate: str) -> bool:
 
 
 def normalize_correlation_id(value: Any) -> str:
-    """采纳调用方给的关联 ID；形状不合规（含未提供）时生成一个新的。"""
+    """采纳调用方给的关联 ID；不合形状（含未提供）就新造一个。"""
 
     candidate = str(value or "").strip()
     return candidate if _is_adoptable(candidate) else _new_id()
 
 
 def current_correlation_id() -> str:
-    """本次请求的关联 ID；不在请求上下文中时为空串。"""
+    """本请求的关联 ID；无请求上下文时为空串。"""
 
     return _context.get("")
 
 
 def correlation_headers() -> dict[str, str]:
-    """向外发起调用时应当带上的关联头。上下文为空则现取一个新值。"""
+    """本次出站调用应当带上的关联头。上下文为空则现取一个新值。"""
 
     return {CORRELATION_ID_HEADER: current_correlation_id() or _new_id()}
 
@@ -83,7 +83,7 @@ def _binding(correlation_id: str) -> Iterator[None]:
 
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
-    """为每次请求绑定关联 ID，并在响应上回显同一个值。
+    """每次请求都绑定关联 ID；同一个值在响应上回显。
 
     处理顺序：读头 → 归一化 → 绑定上下文 → 写 ``request.state.correlation_id``
     → 调用下游 → 回显 → 无条件解绑。
