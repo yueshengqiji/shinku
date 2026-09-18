@@ -146,7 +146,9 @@
 
 1. 契约文档 `docs/contracts/c1_3_capability_and_resource_manifests.md`（只记录外部可观察行为）；
 2. 独立测试 `tests/test_contract_c1_3.py`（**143 个用例**，含 **31 条拒绝路径用例**
-   （覆盖契约 §3.6 的 **21 个原因码**）、8 条优先级顺序、边界扫描与契约表达式定点断言）；
+   （覆盖契约 §3.6 的 **19 个原因码**，读失败类 `yaml_parse_error`／`read_error` 另由
+   `ManifestReadFailureTests` 覆盖 ⇒ 21 个原因码全数覆盖）、8 条优先级顺序、
+   边界扫描与契约表达式定点断言）；
 3. 实现独立：旧模块的 **56 个私有名**（模块级 11 + 类内 35 + capabilities 侧 11 中重合部分）
    在本批五个新文件里**零命中**。这条用 `tokenize` 取**精确标识符 token** 比对，
    不用子串匹配——`_text` / `_key` / `_meta` / `_background` 这类短名字用子串匹配会把
