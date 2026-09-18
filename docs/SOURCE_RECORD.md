@@ -59,14 +59,35 @@
 
 ### 4.2 C 阶段起（每批追加）
 
-| 路径 | 进库日期 | 分类 | 与旧项目的关系 | 依据（重写记录 / 契约文档） |
+进库日期均为 2026-09-18。**C1-1 处理类型 = 契约事实迁移**（来源记录 §5.9 路径 A）：
+契约事实允许按事实迁移并须登记事实来源；docstring、注释、内部组织与文件切分、
+内部命名风格、实现步骤必须 Shinku 独立撰写。
+
+| 路径 | 进库日期 | 分类 | 契约事实来源 | 依据（重写记录 / 契约文档） |
 | --- | --- | --- | --- | --- |
-| _（尚无）_ | | | | |
+| `src/shinku/contracts/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 表达层：Shinku 撰写 |
+| `src/shinku/contracts/tasks.py` | 2026-09-18 | **契约事实迁移** | `companion_v01/task_types.py`、`companion_v01/task_worker_contract.py` | 契约 `docs/contracts/c1_1_data_contracts.md` §2；表达层：Shinku 撰写（两个来源文件合并为一个模块，文件切分为本仓库自有组织） |
+| `src/shinku/contracts/retrieval.py` | 2026-09-18 | **契约事实迁移** | `companion_v01/retrieval_types.py` | 同上 §3 |
+| `src/shinku/contracts/http.py` | 2026-09-18 | **契约事实迁移** | `companion_v01/http_response.py` | 同上 §4 |
+| `src/shinku/contracts/capability.py` | 2026-09-18 | **契约事实迁移** | `companion_v01/capability_adapters/types.py` | 同上 §5 |
+| `tests/test_contract_c1_1.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；断言对象为契约的外部可观察行为，含失败测试 |
+
+**C1-1 未做的事：** 未搬运 `capability_adapters/manifest.py` 的解析逻辑（属 C1-3，洁净室重写）；
+未搬运 `manifest_loader.py` 的转发壳（与 `manifest` 同批处理）。
+
+顺带说明：`docs/contracts/c1_1_data_contracts.md` 是本批的行为契约文档，
+`docs/ADMISSION.md`、`README.md`、`NOTICE`、`env.example` 是仓库级文档，
+均不在本台账的「代码 + 测试」计数口径内（与 B1 保持一致）。
 
 ## 5. 当前未决
 
-- 旧项目里 36 个 `UNCONFIRMED` 文件与 106 个 `REWRITE_REQUIRED` 文件的处置方向，
-  取决于使用者对"字节相同是否等于来自 Akane"的澄清（见旧项目
-  `SOURCE_PROVENANCE.md` §5.6）。
-- 该澄清**不改变 B1 的结论**：无论哪一种解释，B1 都只应建骨架，
-  差别只在于 C 阶段要重写的模块数量。
+- **C1 剩余批次**：C1-2（`request_context`、`routes/sessions`、`task_artifacts`、`tool_invocation`）、
+  C1-3（`capability_adapters/manifest` + `manifest_loader`、`resource_manifest`）、
+  C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）——
+  三者均为**洁净室重写**，不是契约事实迁移。
+- **已纳入 C 阶段重写清单的 3 个模块**：`huggingface_provider.py`、`health.py`、
+  `capability_safety.py`（见来源记录 §5.9 决定三），归属批次待定。
+- **`ADMISSION.md` §4 的自动化检查**仍为欠账（import graph 扫描、文本扫描规则重写、
+  台账完整性、许可证清单）。
+- 旧项目里的 36 个 `UNCONFIRMED` 与 106 个 `REWRITE_REQUIRED` 的处置方向
+  **已定**：分类不动（旧项目 `SOURCE_PROVENANCE.md` §5.7），C 阶段范围按 §5.9 收缩。
