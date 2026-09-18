@@ -128,10 +128,11 @@ class PathTests(unittest.TestCase):
         env = {"LOCALAPPDATA": "/tmp/fake-localappdata"}
         for root in (names.data_root(env), names.config_root(env), names.log_root(env)):
             with self.subTest(root=str(root)):
-                self.assertEqual(root.parent.parent.name.lower(), "shinku")
+                # root 本身是 .../<Shinku>/data|config|logs，所以状态根是它的父目录。
+                self.assertEqual(root.parent.name.lower(), "shinku")
                 if sys.platform == "win32":
-                    self.assertEqual(root.parent.parent.name, "Shinku")
-                    self.assertEqual(root.parent.parent.parent.name, "fake-localappdata")
+                    self.assertEqual(root.parent.name, "Shinku")
+                    self.assertEqual(root.parent.parent.name, "fake-localappdata")
 
     def test_data_default_is_not_inside_the_repository(self) -> None:
         # 旧项目默认把数据放仓库内 users_data/；新项目按平台约定放用户目录。

@@ -49,6 +49,7 @@
 | `src/shinku/api/__init__.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建 |
 | `src/shinku/api/app.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建 |
 | `src/shinku/hosts/__init__.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建（仅包标记） |
+| `src/shinku/py.typed` | `INDEPENDENT_KEEP` | 无 | 本仓库新建（PEP 561 标记，`pyproject.toml` 已声明） |
 | `tests/test_names.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建 |
 | `tests/test_health.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建 |
 | `tests/test_cli.py` | `INDEPENDENT_KEEP` | 无 | 本仓库新建 |

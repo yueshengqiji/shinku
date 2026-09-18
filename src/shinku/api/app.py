@@ -52,6 +52,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         docs_url=None,
         redoc_url=None,
+        # 关掉 schema 本身。只关 docs_url/redoc_url 是不够的——`/openapi.json` 仍会
+        # 提供完整路由清单，等于把内部面暴露出来。这是干净环境验收实际测出来的缺口。
+        openapi_url=None,
     )
     app.state.settings = resolved
 
