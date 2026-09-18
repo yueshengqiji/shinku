@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shinku"
+version = "0.1.0"
+description = "Shinku 独立实现：AI 角色陪伴运行时（洁净室重建，不含 Akane 代码）"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "yueshengqiji" }]
+keywords = ["shinku", "companion", "runtime"]
+classifiers = [
+    "Private :: Do Not Upload",
+    "Programming Language :: Python :: 3.11",
+]
+
+# 依赖只列 B1 真正用到的。C 阶段每接入一个模块，在这里加它需要的那一个依赖，
+# 而不是先把旧项目的 requirements.txt 整份搬过来——搬过来等于把还没核验的依赖也带进来。
+dependencies = [
+    "fastapi",
+    "uvicorn",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[project.scripts]
+shinku = "shinku.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shinku = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --no-header"

@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+*.log
+logs/
+
+# 本仓库不保存运行期数据：数据根按平台约定放在用户目录下（见 src/shinku/names.py）。
+users_data/
+data/
+
+.env
+.env.local
