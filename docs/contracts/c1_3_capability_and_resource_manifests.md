@@ -36,15 +36,25 @@ C1-3 的三个来源模块都**含逻辑、分支、算法或数据处理**，�
 
 ## 1. 来源模块 → 本仓库模块映射
 
-| 旧模块 | 字节 | 有效行 | 本仓库路径 | 类型 |
-| --- | --: | --: | --- | --- |
-| `companion_v01/capability_adapters/manifest.py` | 13,024 | 266 | `src/shinku/capabilities/manifest.py` | 洁净室重写 |
-| `companion_v01/capability_adapters/manifest_loader.py` | 135 | 2 | 折入上者（不单独建模块） | 转发壳消解 |
-| `companion_v01/resource_manifest.py` | 30,352 | 437 | `src/shinku/resources/manifest.py` | 洁净室重写 |
-| `companion_v01/capability_adapters/safety.py` | 211 | 2 | 折入下者（不单独建模块） | 转发壳消解 |
-| `companion_v01/capability_safety.py` | 371 | 6 | `src/shinku/capabilities/safety.py` | 洁净室重写（传递依赖） |
+| 旧模块 | 字节 | 本仓库路径 | 类型 |
+| --- | --: | --- | --- |
+| `companion_v01/capability_adapters/manifest.py` | 13,024 | `src/shinku/capabilities/manifest.py` | 洁净室重写 |
+| `companion_v01/capability_adapters/manifest_loader.py` | 135 | 折入上者（不单独建模块） | 转发壳消解 |
+| `companion_v01/resource_manifest.py` | 30,352 | `src/shinku/resources/manifest.py` | 洁净室重写 |
+| `companion_v01/capability_adapters/safety.py` | 211 | 折入下者（不单独建模块） | 转发壳消解 |
+| `companion_v01/capability_safety.py` | 371 | `src/shinku/capabilities/safety.py` | 洁净室重写（传递依赖） |
 
-合计来源字节 **43,511**（与计划登记值一致）。
+**字节核对**（逐字节实测，见 `_c1_3_numbers.py` §2）：
+
+| 口径 | 合计 | 覆盖 |
+| --- | --: | --- |
+| 计划登记的 C1-3 三个模块 | **43,511** | `manifest` 13,024 + `manifest_loader` 135 + `resource_manifest` 30,352 |
+| 本批实际触碰的五个模块 | **44,093** | 上面三个 + `capability_adapters/safety.py` 211 + `capability_safety.py` 371 |
+
+两个数都要写出来，因为它们答的不是同一个问题。计划值 **43,511** 只覆盖**计划点名的三个模块**；
+另外两个是 `manifest.py` 的**传递依赖与它的转发壳**——`manifest.py` 不导入它们就无法加载，
+所以它们必须随本批落地。**本批不把 44,093 说成"计划登记值"**：那是本次实测的汇总口径，
+与计划条目不是同一个集合。
 
 ### 1.1 对照物判定（规矩六：先确认真实现，再谈相似度）
 
@@ -407,7 +417,13 @@ asset   = {id, name, aliases, description, notes, path}
 | --- | --- | --- |
 | 背景 | `元数据 id` → `explicit_id（legacy 后缀）` → `canon_background(stem)` | `元数据 name` → `BACKGROUND_LABELS[id]` → `id` |
 | 表情 | `canon_emotion(元数据 id 或 stem)` | `元数据 name` → `EMOTION_LABELS[id]` → `id` |
-| BGM | `元数据 id 或 stem` | `元数据 name` → `id`（BGM 无标签表） |
+| BGM | `元数据 id 或 stem` | `元数据 name` → **`EMOTION_LABELS[id]`** → `id` |
+
+**BGM 走表情标签表是来源事实，不是笔误。** 旧实现的回退链写的是
+「`kind == "background"` 用场景标签表，**否则**用表情标签表」，BGM 落在「否则」一侧。
+后果是：一首 id 恰好在 `EMOTION_LABELS` 里的 BGM（例如 `shy.ogg`）会被显示成「害羞」。
+本批**照录不改**——修它属于行为变更，需单独决定；改动会在测试
+`test_the_emotion_label_table_also_applies_to_tracks` 处立刻变红。
 
 别名：`元数据 aliases`，若 `stem` 既不在别名里、又不等于 id，则追加 `stem`。
 备注：`META_NOTE_KEYS` 各键值 + sidecar 备注（`SIDECAR_NOTE_SUFFIXES` 中第一个有内容的文件）
