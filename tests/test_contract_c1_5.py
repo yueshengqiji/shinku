@@ -12,16 +12,19 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 
 from shinku import health
 
 CONTRACT_KEYS = ["status", "pid", "python", "yt_dlp"]
+MODULE_PATH = Path(__file__).resolve().parents[1] / "src" / "shinku" / "health.py"
 
 
 class HealthPayloadContractTests(unittest.TestCase):
@@ -104,6 +107,35 @@ class HealthPayloadFailureTests(unittest.TestCase):
     def test_a_keyword_argument_is_rejected(self) -> None:
         with self.assertRaises(TypeError):
             health.build_basic_health_payload(reason="extra")
+
+
+class C1_5BoundaryTests(unittest.TestCase):
+    """健康原语不得把旧项目拉进来——B1 的边界在本模块上的延续。
+
+    这一条不只是形式：本模块零逻辑，最容易在补注释时写成「与旧项目的某某保持一致」，
+    那样就把来源路径写进了产品代码。来源路径属于台账，不属于运行时。
+    """
+
+    FORBIDDEN = ("companion_v01", "code_shared", "akane")
+
+    def test_the_module_does_not_mention_a_foreign_project(self) -> None:
+        text = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertGreater(len(text.strip()), 0, "模块不应为空文件")
+        for token in self.FORBIDDEN:
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+
+    def test_the_module_imports_only_the_standard_library(self) -> None:
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        roots: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots.add(node.module.split(".")[0])
+        # `from __future__ import annotations` 不是依赖，先剔掉再断言
+        self.assertEqual(roots - {"__future__"}, {"importlib", "os", "sys", "typing"})
+        self.assertNotIn("yt_dlp", roots, "yt_dlp 是探测对象，不许真 import")
 
 
 if __name__ == "__main__":

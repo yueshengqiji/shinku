@@ -308,7 +308,7 @@ C1-1～C1-4 仍是 C1 的四个子批次，本批不改变它们的登记。
 | 路径 | 进库日期 | 分类 | 事实来源 | 依据（契约文档 / 表达层） |
 | --- | --- | --- | --- | --- |
 | `src/shinku/health.py` | 2026-09-18 | **契约事实迁移** | `code_shared/health.py`（上游真实现 507 B） | 契约 `docs/contracts/c1_5_health_primitive.md` §1；表达层：Shinku 撰写（模块与函数两层 docstring、函数体内两条注释全部新写；四键字典字面量与四个取值表达式按事实逐字迁移） |
-| `tests/test_contract_c1_5.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；13 个用例 / 2 个测试类 / 1 个 subTest 点，含**必须报错**断言（位置参数与关键字参数均 `TypeError`）与**跨进程活性**断言 |
+| `tests/test_contract_c1_5.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；15 个用例 / 3 个测试类 / 2 个 subTest 点，含**必须报错**断言（位置参数与关键字参数均 `TypeError`）、**跨进程活性**断言，以及本仓每批都有的边界类（不得出现旧项目字样、只许标准库导入） |
 | `docs/contracts/c1_5_health_primitive.md` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；10 条契约事实 + 5 条可观察行为 + 已知瑕疵登记（§5） |
 
 **对照物判定（规矩六的第四种形态）。** 前三种是：Akane 侧是转发壳、Akane 侧逐字节相同、
