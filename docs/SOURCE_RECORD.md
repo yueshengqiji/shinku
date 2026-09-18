@@ -294,15 +294,70 @@ embedding_provider`、`embedding_provider → text_utils(tokenize)`。**传递�
 `model_service.py`，两者必须同批 ⇒ 已并入 C2-2）；未迁 `text_utils.py` 的其余部分
 （时间表达解析、话题抽取、聊天渲染属 C5）。
 
+#### 4.2.6 C1-5 进程健康载荷原语 —— 契约事实迁移（C1 重写清单的收口批）
+
+**为什么叫「收口批」：** 2026-09-18 的 C1 对账决定把 3 个未处理的高相似模块纳入重写清单
+（`huggingface_provider.py` 0.887、`health.py` 0.905、`capability_safety.py` 0.800）。
+前两项已分别由 C1-3 与 C2-1 随行落地（§4.2.3／§4.2.5），**本批了结最后一项**。
+C1-1～C1-4 仍是 C1 的四个子批次，本批不改变它们的登记。
+
+**类型判定：** 全文件 = 1 个模块 docstring + 1 个无参函数 + 1 条 `return` 字典字面量 + `__all__`，
+**无分支、无算法、无状态** ⇒ 归「纯契约」类，登记写法「事实来源=…｜表达层：Shinku 撰写」。
+契约文档 `docs/contracts/c1_5_health_primitive.md` 列了 10 条契约事实与 5 条外部可观察行为。
+
+| 路径 | 进库日期 | 分类 | 事实来源 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/health.py` | 2026-09-18 | **契约事实迁移** | `code_shared/health.py`（上游真实现 507 B） | 契约 `docs/contracts/c1_5_health_primitive.md` §1；表达层：Shinku 撰写（模块与函数两层 docstring、函数体内两条注释全部新写；四键字典字面量与四个取值表达式按事实逐字迁移） |
+| `tests/test_contract_c1_5.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；13 个用例 / 2 个测试类 / 1 个 subTest 点，含**必须报错**断言（位置参数与关键字参数均 `TypeError`）与**跨进程活性**断言 |
+| `docs/contracts/c1_5_health_primitive.md` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；10 条契约事实 + 5 条可观察行为 + 已知瑕疵登记（§5） |
+
+**对照物判定（规矩六的第四种形态）。** 前三种是：Akane 侧是转发壳、Akane 侧逐字节相同、
+Akane 侧存在同类实现。本批是第四种：
+
+- Akane 侧 `companion_v01/health.py` **根本不存在**——上游的 `routes/core.py` 直接
+  `from code_shared.health import ...`，所以「Akane 同路径文件」这个默认对照物拿不到；
+- 上游真实现是外置包 `code_shared/code_shared/health.py`（507 B）；
+- **Shinku 旧侧 `companion_v01/health.py`（428 B）不是转发壳**（没有 `from code_shared ...`），
+  而是**完整复制**：`return` 语句逐字相同，差异只有「删掉函数 docstring + 改写模块 docstring」。
+  ⇒ 这是 §5.8 那 4 项「本地重写声明不成立」的**同型第 5 例**，且 0.905 是全项目最高的一例。
+  同侧还**缺少对应测试**（旧仓 `tests/test_health.py` 不存在，只有上游包自带一份 530 B 的）。
+
+**本批判据不看相似度**（§5.6）。相似度与代码行 diff 仍照录：
+
+| 对比 | 整文件相似度 | 代码行 diff（剔掉注释与 docstring 之后） |
+| --- | --- | --- |
+| 新实现 vs 上游 | 0.6255 | **除两处 docstring 外逐行相同**（导入、`def` 行、`return` 块、`__all__`） |
+| 新实现 vs Shinku 旧侧 | 0.6473 | 同上；旧侧函数 docstring 已被删 |
+| Shinku 旧侧 vs 上游 | 0.8171 | 只有两处 docstring 差异 |
+
+**这张表本身是规矩七的样本：** 新实现的整文件相似度（0.6255）**低于**旧侧的（0.8171），
+唯一原因是新 docstring 更长——整文件比值对「表达层有没有被重写」没有分辨力。
+
+**为什么一个零逻辑的迁移批仍然做了对拍与变异（本批超出迁移批最低要求）：**
+本模块虽无分支，却有**运行时读取**（`os.getpid()`／`sys.executable`／依赖探针），
+也就是有可观察行为。不跑对拍，「值语义逐字迁移」就只是一句主张；不跑变异，
+「测试有效」也一样。实测：对拍 5 组 / 21 次比对 / **0 差异**（含跨进程）；
+变异注入 5 个 / 抓住 5 个 / **漏 0 个**。**21 次比对是个小数字**，因为本模块没有参数、
+没有分支，语料无法拓宽——不拿次数冒充强度（对比 C2-1 的 2,278 次）。
+
+**依赖变更：无。** 只用标准库（`importlib.util`／`os`／`sys`／`typing`）。
+**`yt_dlp` 是探测对象，不是依赖**——本批明确不把它写进 `pyproject.toml`。
+推论（已记入契约文档 §5）：在新仓接入附件下载链路（C4）之前，该字段**恒为 `False`**。
+
+**本批未做的事：** 未装配——`api/app.py` 的 `/health`（B1 写就，12 个字段的配置回显）
+**不改**；它与本原语的字段只有 `status`／`pid` 两项重叠，合并是一次架构决定，
+不属于一个模块迁移批。接入点已记入契约文档 §6 与 §5 的未决项。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
   洁净室重写见 §4.2.2／§4.2.3／§4.2.4。**C1 范围内已无待办模块。**
+  C1-5（§4.2.6）是 C1 对账清单的**收口批**，不改变上列四个子批次的登记。
 - **C2 起按依赖图切批**（2026-09-18）：C2-1 已完成（§4.2.5）。下一批 C2-2 的候选是
   `model_service_config.py` + `model_service.py`——读代码确认两者必须同批（前者的 389 行
   全部在委托后者），且属**传输层**，对拍时要替换 `requests`。
-- **C 阶段重写清单里尚未排批的，只剩 `health.py`。** 原先三项待定里，
-  `capability_safety.py` 已由 C1-3 了结、`huggingface_provider.py` 已由本批（C2-1）了结。
+- ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
+  （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
   **已于 2026-09-18 完成**，见 §4.2.4。
 - **C1-2 / C1-3 / C1-4 的装配都未做**：`CorrelationIdMiddleware` 与 sessions 路由没接进
@@ -310,11 +365,14 @@ embedding_provider`、`embedding_provider → text_utils(tokenize)`。**传递�
   `PublicThinkGuard` 与证据门没接进任何发送路径。三批都只产出「可被装配的工厂与类」，
   **没有改到运行期服务面**，B1 的健康面与启动链行为不变。因此三批都不做进程探针，
   理由记在各自的批次记录里。
-- **已纳入 C 阶段重写清单的 3 个模块**：`huggingface_provider.py`、`health.py`、
-  `capability_safety.py`。
-  ~~`capability_safety.py`~~ **已于 2026-09-18 在 C1-3 落地**（见 §4.2.3）；
-  ~~`huggingface_provider.py`~~ **已于 2026-09-18 在 C2-1 落地**（见 §4.2.5）；
-  三项里只剩 `health.py`（属服务面）**归属批次待定**。
+- **已纳入 C 阶段重写清单的 3 个模块 —— 三项全部了结**：`capability_safety.py`
+  由 C1-3 随行落地（§4.2.3）、`huggingface_provider.py` 由 C2-1 随行落地（§4.2.5）、
+  `health.py` 由 **C1-5** 了结（§4.2.6）。**该清单已空。**
+- **`/health` 的「双轨」是未决项，不是遗漏**（2026-09-18 C1-5 记）：B1 的 `api/app.py`
+  里那个 12 字段的 `/health`（配置回显）与本原语（进程事实）字段只重叠 `status`／`pid`。
+  合并、并存还是让 B1 那个改成消费本原语，是一次**架构决定**，需要单独拍板；
+  在拍板前两边并存，且**本原语当前无消费者**——这一点在台账里说清楚，
+  免得后面读的人把「模块存在」误读成「已装配」。
 - **`ADMISSION.md` §4 的自动化检查**仍为欠账（import graph 扫描、文本扫描规则重写、
   台账完整性、许可证清单）。
 - 旧项目里的 36 个 `UNCONFIRMED` 与 106 个 `REWRITE_REQUIRED` 的处置方向
