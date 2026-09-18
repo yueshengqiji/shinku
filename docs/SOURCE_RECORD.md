@@ -233,10 +233,76 @@ Akane 侧都是**转发壳**（183 B / 1,015 B，正文只有 `from code_shared.
 走引擎 metric，模块本身不产生 metric）；未碰 `model_service_config.py`、`tool_runtime.py`、
 `tool_orchestration_engine.py` 等消费方。
 
+#### 4.2.5 C2-1 上游静默开关、文本切词与嵌入供应商 —— 洁净室重写（含一段随行切片）
+
+来源侧四个模块都含逻辑、分支或算法，因此**不是**契约事实迁移。登记写法
+「契约=`<契约文档>`｜实现独立」。四个对照物合计 **14,406 字节**；另有一段**必须随行**的
+源——`text_utils.py`（570 行 / 18,415 B）里的 `tokenize` 切片，见契约 §2.3。
+
+**切批依据不是目录，是依赖图**（`_c2_dep_graph.py` 的输出）：`huggingface_provider →
+embedding_provider`、`embedding_provider → text_utils(tokenize)`。**传递依赖必须随行**，
+与 C1-3 的 `capability_safety.py` 同一条规矩。本批也是 C2 里**唯一不碰网络**的一批
+（四个模块一个 `requests`／`urllib` 都没有），所以不必替换传输层就能把对拍跑完——
+这是它被排在 C2 第一位的理由。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/llm/circuit_breaker.py` | 2026-09-18 | **洁净室重写** | `companion_v01/llm_circuit_breaker.py`（3,573 B） | 契约 `docs/contracts/c2_1_provider_layer.md` §1；表达层：Shinku 撰写（按领域改置 `llm/`；内部状态命名整组更换——`_lock`／`_consecutive_failures`／`_open_until`／`_open_count`／`_last_failure_at`／`_last_success_at`／`_BREAKER` 七个旧私有名零命中；docstring 里 2026-09-08 事故背景那段整体重写） |
+| `src/shinku/text/tokenizer.py` | 2026-09-18 | **洁净室重写** | `code_shared/text_tokenizer.py`（1,144 B）；行为基准取 Shinku 旧侧 `companion_v01/text_utils.py` 的 `tokenize` | 同上 §2；表达层：Shinku 撰写（**只迁本切片用到的四条顶层语句**，`text_utils.py` 其余 500 行属 C5；汉字串展开抽为 `_expanded`，判定用 `_CJK_ONLY.fullmatch`，窗宽表 `_SLIDING_WIDTHS` 具名；`TOKEN_RE`／`STOPWORDS`／`normalize_text` 是契约事实，逐字保留） |
+| `src/shinku/providers/embedding.py` | 2026-09-18 | **洁净室重写** | `code_shared/embedding_provider.py`（5,384 B）；行为基准取 Shinku 旧侧 `companion_v01/embedding_provider.py` | 同上 §3；表达层：Shinku 撰写（`_COLLECTION_COMPONENT_RE`→`_NON_KEY_CHARS`、`_dimension`→`_width`、`_legacy_collection_name`→`_retired_name`、`_cache`→`_stored`、`_get`／`_put`→`_recall`／`_store`、`_lock`→`_guard`；哈希算法是契约事实，逐字保留） |
+| `src/shinku/providers/huggingface.py` | 2026-09-18 | **洁净室重写** | `code_shared/huggingface_provider.py`（4,305 B）；行为基准取 Shinku 旧侧 `companion_v01/huggingface_provider.py` | 同上 §4；表达层：Shinku 撰写（`_load_model`→`_open_encoder`、`_model`→`_encoder`、`_temporary_hf_load_env`→`_hf_env_override`；`RuntimeError` 消息与两个环境变量名是契约事实，逐字保留） |
+| `src/shinku/llm/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 本仓库新建 |
+| `src/shinku/text/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 本仓库新建 |
+| `src/shinku/providers/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | C1-4 新建，本批只改 docstring：说明新增的两个子模块**不进** `__all__`（`__all__` 是从扁平模块 `provider_config` 迁入时留下的兼容面，再往里塞会把聚合面变成「什么都有」的口袋；调用方按全路径导入，做法同 `shinku.tools`／`shinku.guards`） |
+| `tests/test_contract_c2_1.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；断言对象为契约的外部可观察行为，含边界扫描与契约表达式定点断言 |
+
+**对照物判定（规矩六在本批第三次命中）：** `embedding_provider.py` 在 Akane 侧是
+**628 B / 20 行转发壳**、`huggingface_provider.py` 是 **279 B / 10 行转发壳**，若拿它们当对照物，
+整文件比值会给出假低值、方向完全反（与 C1-4 的 `public_guard` 同型）。对照物一律取 `code_shared`
+的真实现。`text_tokenizer.py` 在 Akane 侧**不存在**（它是 `code_shared` 从 `text_utils.py`
+抽出来的公共件）；`llm_circuit_breaker.py` 则是**两侧逐字节相同**
+（sha `2c70d263b115`，属 A2-6 那批「同路径完全相同文件」），因此并集就是这一个文件。
+
+**C2-1 的合格判据不是相似度，而是「有契约文档 + 独立测试 + 实现独立」。** 六项证据：
+
+1. 契约文档 `docs/contracts/c2_1_provider_layer.md`（只记录外部可观察行为，是本批唯一的需求输入）；
+2. 独立测试 `tests/test_contract_c2_1.py`（**115 个用例 / 17 个测试类 / 21 个 subTest 点**）；
+3. 实现独立：旧侧 **34 个私有名**（取「对照物 ∪ Shinku 旧实现」的并集，`kit.py namegap`
+   核对覆盖完整、0 缺口）在本批新文件里**零命中**，用 `tokenize` 取**精确标识符 token** 比对；
+4. 散文独立：docstring + 注释、连续 ≥12 字符的逐字片段，**0 处**。首版 1 处命中的是
+   产品名（`sentence-transformers`／`HuggingFace`），按规矩十二「术语不算复制」本可登记豁免；
+   仍改写掉以获得一个**不需要解释的 0**；
+5. **行为等价性对拍 `_c2_1_parity.py`：2,278 次比对、0 处差异**。四组：
+   `circuit_breaker` 45 组参数网格 × 24 步操作（注入可控时钟）、`tokenizer` 41 组语料、
+   `embedding` 命名网格 48 组 + 哈希 48 组 + 缓存 48 组、`huggingface` 600 组构造网格；
+6. **变异测试：注入 31 个典型缺陷，全部被抓住、0 漏**，恢复后逐文件 sha256 与初始值一致。
+
+**本批登记的一处有意差异（不是行为差异）：** 新侧 `llm/circuit_breaker.py` 显式声明了 `__all__`，
+旧侧没有（`__all__` 只影响 `from ... import *`，旧侧从未声明）。对拍脚本对 `__all__`
+**只在两侧都声明时才比对**，并在报告里打印这次跳过——不把「旧侧没声明」伪装成「旧侧声明了空表」。
+
+**来源侧的一个事实照录不改：** 契约 §3.2 的集合键兜底值 `"embedding"`（`squeezed or "embedding"`）
+在公开路径上**不可达**——名字至少是 `"base"`、维度至少是 1，拼出来的键永远含数字。
+它与旧实现一致，属契约事实，**保留以免改变行为**；本批把它记为「已知死分支」而不是删掉。
+
+**依赖变更：无。** 四个模块只用标准库（`threading`／`time`／`re`／`hashlib`／`math`／
+`collections`／`abc`／`typing`／`inspect`／`os`／`warnings`／`contextlib`），
+`pyproject.toml` 的 `dependencies` 本批未动。
+
+**C2-1 未做的事：** 未装配——熔断器没接进任何发送路径、`tokenizer`／`embedding` 没接进检索，
+属 C4/C6；未碰 `model_service_config.py`（读代码后确认它不是自足实现，整整 389 行都在委托
+`model_service.py`，两者必须同批 ⇒ 已并入 C2-2）；未迁 `text_utils.py` 的其余部分
+（时间表达解析、话题抽取、聊天渲染属 C5）。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
   洁净室重写见 §4.2.2／§4.2.3／§4.2.4。**C1 范围内已无待办模块。**
+- **C2 起按依赖图切批**（2026-09-18）：C2-1 已完成（§4.2.5）。下一批 C2-2 的候选是
+  `model_service_config.py` + `model_service.py`——读代码确认两者必须同批（前者的 389 行
+  全部在委托后者），且属**传输层**，对拍时要替换 `requests`。
+- **C 阶段重写清单里尚未排批的，只剩 `health.py`。** 原先三项待定里，
+  `capability_safety.py` 已由 C1-3 了结、`huggingface_provider.py` 已由本批（C2-1）了结。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
   **已于 2026-09-18 完成**，见 §4.2.4。
 - **C1-2 / C1-3 / C1-4 的装配都未做**：`CorrelationIdMiddleware` 与 sessions 路由没接进
@@ -247,8 +313,8 @@ Akane 侧都是**转发壳**（183 B / 1,015 B，正文只有 `from code_shared.
 - **已纳入 C 阶段重写清单的 3 个模块**：`huggingface_provider.py`、`health.py`、
   `capability_safety.py`。
   ~~`capability_safety.py`~~ **已于 2026-09-18 在 C1-3 落地**（见 §4.2.3）；
-  其余两个（`huggingface_provider.py` 属 `providers/` 领域、`health.py` 属服务面）
-  **归属批次待定**。
+  ~~`huggingface_provider.py`~~ **已于 2026-09-18 在 C2-1 落地**（见 §4.2.5）；
+  三项里只剩 `health.py`（属服务面）**归属批次待定**。
 - **`ADMISSION.md` §4 的自动化检查**仍为欠账（import graph 扫描、文本扫描规则重写、
   台账完整性、许可证清单）。
 - 旧项目里的 36 个 `UNCONFIRMED` 与 106 个 `REWRITE_REQUIRED` 的处置方向
