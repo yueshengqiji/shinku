@@ -58,6 +58,8 @@ class AgentDecision:
         if not isinstance(value, Mapping):
             return None
         kind = str(value.get("kind") or value.get("action") or "").strip().lower()
+        if not kind and ("tool_call" in value or "invocation" in value):
+            kind = "tool"
         text = str(value.get("text") or value.get("speech") or value.get("message") or "").strip()
         if kind in {"final", "answer", "done", "complete"}:
             return cls.final(text)
@@ -66,9 +68,19 @@ class AgentDecision:
         raw_call = value.get("invocation") if isinstance(value.get("invocation"), Mapping) else value.get("tool_call")
         if kind in {"tool", "call_tool", "tool_call"} and isinstance(raw_call, Mapping):
             name = str(raw_call.get("name") or raw_call.get("type") or "").strip()
-            arguments = raw_call.get("arguments") if isinstance(raw_call.get("arguments"), Mapping) else {
-                key: item for key, item in raw_call.items() if key not in {"type", "name", "arguments"}
-            }
+            raw_arguments = raw_call.get("arguments")
+            if isinstance(raw_arguments, Mapping):
+                arguments = dict(raw_arguments)
+            elif isinstance(raw_arguments, str):
+                try:
+                    decoded = json.loads(raw_arguments)
+                except (TypeError, ValueError):
+                    decoded = {}
+                arguments = dict(decoded) if isinstance(decoded, Mapping) else {}
+            else:
+                arguments = {
+                    key: item for key, item in raw_call.items() if key not in {"type", "name", "arguments"}
+                }
             if name:
                 return cls.tool(
                     ToolInvocation(

@@ -729,6 +729,28 @@ C3-2 工作区事件写入点也已保留。
 本批无新增依赖，旧项目源码没有被修改。真实供应商/QQ/浏览器接线留到后续宿主
 适配批次，不把离线循环测试冒充线上 Agent 灰测。
 
+#### 4.2.17 C3-5 LLM planner 适配 —— 洁净室重写
+
+C3-5 将现有 `LLMRuntime.call_chat_json` 接到 C3-4 的 planner 协议，但不把 runtime
+硬编码到循环内。`LLMPlanner` 负责固定 system prompt、可注入 user prompt、有限历史、
+结构化 native tool schema 透传，以及 final/wait/legacy/native tool-call 结果归一化。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/agent/planner.py` | 2026-09-19 | **洁净室重写** | C2-5 `LLMRuntime.call_chat_json` 的调用面与 C3-4 `Planner` 协议 | 契约 `docs/contracts/c3_5_llm_planner.md`；只做适配与解析，不执行工具、不决定重试 |
+| `src/shinku/agent/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；增加 `LLMPlanner` 导出 |
+| `tests/test_contract_c3_5.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；runtime 全程假件，覆盖 final、wait、旧 JSON tool_call、native tool_calls、历史与 prompt 注入 |
+| `docs/contracts/c3_5_llm_planner.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录模型适配边界 |
+
+**输入面决定：** 工具说明通过 `native_tools` 结构化参数发送；普通 user prompt 只含
+当前任务和有限历史，不再把 handler 注释密集拼入上下文。无法识别的模型返回直接交给
+AgentLoop 的 `invalid_decision` 分支，不生成口头假工具调用。
+
+**验收证据：** C3-5 专项测试 **5 passed / 0 failed**；全量回归为
+**1070 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。
+本批不新增依赖，旧项目源码没有被修改。真实供应商请求和真实工具宿主仍需下一批
+灰度接线后再测，当前结果不冒充线上 Agent 灰测。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -746,8 +768,8 @@ C3-2 工作区事件写入点也已保留。
   任务循环、工具注入与失败恢复**；C3-1 已完成任务协议层（§4.2.13），下一批进入
   任务快照/事件边界与执行器输入输出，不接 QQ 路由）；C3-2 已完成任务快照/事件
   服务边界（§4.2.14），C3-3 已完成单轮工具执行与错误封装（§4.2.15），C3-4 已
-  完成离线计划-工具-结果循环与失败恢复（§4.2.16），下一批进入 LLMRuntime
-  planner 适配和真实工具宿主接线。
+  完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
+  planner 适配（§4.2.17），下一批进入真实工具宿主接线和 Agent 灰度回归。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
