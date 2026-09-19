@@ -7,6 +7,7 @@ from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, Outgoi
 from .adapter import QQIngressAdapter, QQIngressResult
 from .host import NapCatHost, NapCatHostResult
 from .agent_bridge import QQAgentBridge, QQAgentReply
+from .assembly import QQAgentAssembly, QQAgentConfig, QQAgentConfigError, assemble_qq_agent, load_qq_agent_config
 from .turns import NapCatTurnDispatcher, QQTurn, TurnDispatchReceipt
 from .config import NapCatConnectionConfig
 from .webhook import create_napcat_webhook_router
@@ -44,6 +45,11 @@ __all__ = [
     "NapCatHostResult",
     "QQAgentBridge",
     "QQAgentReply",
+    "QQAgentAssembly",
+    "QQAgentConfig",
+    "QQAgentConfigError",
+    "assemble_qq_agent",
+    "load_qq_agent_config",
     "NapCatTurnDispatcher",
     "QQTurn",
     "TurnDispatchReceipt",

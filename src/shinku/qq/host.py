@@ -144,6 +144,11 @@ class NapCatHost:
     def flush(self):
         return self.ingress.flush()
 
+    def set_turn_dispatcher(self, dispatcher: TurnDispatcher | None) -> None:
+        """在宿主创建后接入回合调度器，避免构造阶段的循环依赖。"""
+
+        self.turn_dispatcher = dispatcher
+
     def send(self, message: OutgoingMessage) -> DeliveryResult:
         if self.transport is None:
             return DeliveryResult(False, "transport_unconfigured", error="napcat_transport_unconfigured")

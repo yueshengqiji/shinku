@@ -6,16 +6,19 @@ Shinku 的**独立实现**仓库。AI 角色陪伴运行时。
 业务模块在 C 阶段按行为契约逐个重写后加入，每加入一个模块就更新 `NOTICE` 与
 `docs/SOURCE_RECORD.md`。
 
-## 当前状态（B1：骨架）
+## 当前状态（C4-20：Agent 装配边界已完成）
 
-本仓库现在**只有骨架**，没有业务逻辑。这是有意的，不是没做完：
+本仓库已经完成 C1～C4-20 的独立洁净室重写边界：LLM runtime、AgentLoop、ToolHost、
+QQ/NapCat 入站、图片视觉桥、短窗口回合合并、独立 persona 加载和 QQ Agent dry-run
+装配均已落地。当前仍处于灰度接线阶段，真实 NapCat 出站默认关闭，尚未替换旧项目的
+9998 服务。
 
 严格分类下，旧项目 183 个运行时文件里只有 2 个具备 `INDEPENDENT_KEEP` 依据，
 其余是 106 个 `REWRITE_REQUIRED` + 36 个 `UNCONFIRMED`。按计划 B 的验收口径
 （"不存在 `UNCONFIRMED` 或 `REWRITE_REQUIRED` 文件进入独立发布包"），
 **B1 阶段一个业务文件都不能搬进来**。
 
-B1 交付的是：
+最初 B1 交付的是：
 
 | 内容 | 位置 |
 | --- | --- |

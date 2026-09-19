@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from shinku.agent.loop import AgentRunResult, AgentState
+from shinku.agent.loop import AgentState
 from shinku.agent.planner import ChatRuntime, PromptBuilder
 from shinku.hosts.tool_host import ToolHost
 from shinku.tools.execution import ExecutionPolicy

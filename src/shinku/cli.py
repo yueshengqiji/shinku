@@ -25,6 +25,9 @@ from .config import ensure_directories, load_project_env, load_settings
 from .qq.config import NapCatConnectionConfig
 from .qq.host import NapCatHost
 from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
+from .qq.assembly import QQAgentConfigError, assemble_qq_agent, load_qq_agent_config
+from .qq.turns import NapCatTurnDispatcher
+from .persona import PersonaLoadError, load_persona
 
 IMPLEMENTED_SERVICES = ("backend",)
 
@@ -69,6 +72,27 @@ def _cmd_doctor() -> int:
         f"action_token={'set' if napcat_diag['token_present'] else 'unset'} "
         f"event_token={'set' if napcat_diag['event_token_present'] else 'unset'}"
     )
+    agent_config = load_qq_agent_config()
+    print()
+    persona_status = "unset"
+    if agent_config.persona_file:
+        try:
+            load_persona(agent_config.persona_file)
+            persona_status = "valid"
+        except PersonaLoadError as exc:
+            persona_status = f"invalid:{exc}"
+    print(
+        "qq agent          : "
+        f"{'enabled' if agent_config.enabled else 'disabled'} "
+        f"send={'enabled' if agent_config.send_enabled else 'dry-run'} "
+        f"persona={persona_status} "
+        f"model={agent_config.chat_model_name or '(unset)'}"
+    )
+    if agent_config.enabled:
+        errors = list(agent_config.validation_errors())
+        if persona_status.startswith("invalid:"):
+            errors.append(persona_status.removeprefix("invalid:"))
+        print("qq agent config   : " + ("valid" if not errors else ",".join(errors)))
     print()
     if created:
         print("created:")
@@ -103,6 +127,13 @@ def _cmd_serve(service: str) -> int:
     from .api import create_app
 
     napcat_config = NapCatConnectionConfig.from_env()
+    agent_config = load_qq_agent_config()
+    if agent_config.enabled and not napcat_config.webhook_enabled:
+        print(
+            "invalid enabled QQ Agent configuration: napcat_webhook_required",
+            file=sys.stderr,
+        )
+        return 2
     napcat_host = None
     if napcat_config.webhook_enabled:
         errors = napcat_config.validate()
@@ -115,6 +146,18 @@ def _cmd_serve(service: str) -> int:
                 materialize=NapCatImageMaterializer(allowed_roots=napcat_config.image_roots)
             ),
         )
+        if agent_config.enabled:
+            try:
+                sender = napcat_host.send if agent_config.send_enabled else None
+                assembly = assemble_qq_agent(agent_config, sender=sender)
+            except (QQAgentConfigError, ValueError) as exc:
+                print(f"invalid enabled QQ Agent configuration: {exc}", file=sys.stderr)
+                return 2
+            dispatcher = NapCatTurnDispatcher(
+                handler=assembly.bridge,
+                flush_batch=napcat_host.flush,
+            )
+            napcat_host.set_turn_dispatcher(dispatcher)
 
     app = create_app(
         settings,

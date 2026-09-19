@@ -1179,6 +1179,30 @@ failed**；全量回归 **1154 passed / 0 failed**，2286 个 subTest 保持通�
 warning；compileall 与 diff check 通过。下一步是注入独立 persona/context、真实 runtime
 配置和受控 sender，仍保持默认 dry-run。
 
+#### 4.2.42 C4-20 独立 persona / runtime / QQ Agent 装配 —— 洁净室重写
+
+C4-20 增加显式主人设加载器和 QQ Agent 装配配置：主人设只从
+`SHINKU_PERSONA_FILE` 读取，模型端点/模型名/密钥状态可由 `doctor` 检查；只有
+`SHINKU_QQ_AGENT_ENABLED=true` 才把回合调度器接到 Agent，真实出站还必须额外打开
+`SHINKU_QQ_AGENT_SEND_ENABLED=true`。默认仍不调用模型、不发送 QQ，不重启 NapCat。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/persona/loader.py` | 2026-09-20 | **洁净室重写** | C4-20 persona 边界 | 显式 UTF-8 文件、大小上限、无旧项目回退 |
+| `src/shinku/persona/__init__.py` | 2026-09-20 | **洁净室重写** | C4-20 persona 边界 | 独立包出口 |
+| `src/shinku/qq/assembly.py` | 2026-09-20 | **洁净室重写** | C4-19 Agent 桥接 | 配置校验、runtime/bridge 注入、dry-run 保护 |
+| `src/shinku/qq/host.py` | 2026-09-20 | **洁净室重写** | C4-18 回合调度 | 增加创建后注入 dispatcher 的显式 setter |
+| `src/shinku/qq/__init__.py` | 2026-09-20 | **洁净室重写** | C4-20 装配出口 | 导出独立装配 API |
+| `src/shinku/cli.py` | 2026-09-20 | **洁净室重写** | C4-14 启动链 | doctor 诊断与显式 Agent 组装 |
+| `.env.example` | 2026-09-20 | `INDEPENDENT_KEEP` | C4-20 配置说明 | 仅新增 `SHINKU_*` 样例，不含密钥 |
+| `tests/test_contract_c4_20.py` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖加载、校验与 dry-run |
+| `docs/contracts/c4_20_agent_runtime_assembly.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录安全装配边界 |
+
+**验收证据：** C4-20 专项测试 **5 passed / 0 failed**；全量回归 **1159 passed / 0
+failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 diff check 通过。
+本批没有读取旧项目 persona、没有使用真实密钥、没有重启 NapCat，也没有开启真实 QQ
+出站。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1209,9 +1233,7 @@ warning；compileall 与 diff check 通过。下一步是注入独立 persona/co
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
   （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
   （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38），C4-17 已完成并行 forward
-  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40），C4-19 已完成 QQ Agent/LLM 桥接（§4.2.41）。下一步是注入独立 persona/context、真实 runtime
-  配置和受控 sender，再由用户确认后 reload/
-  restart NapCat，最后做受控出站回归；现阶段没有让独立版发送 QQ 消息。
+  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40），C4-19 已完成 QQ Agent/LLM 桥接（§4.2.41），C4-20 已完成独立 persona/context、runtime 配置与 dry-run 装配（§4.2.42）。下一步是由用户确认后 reload/restart NapCat，再做受控出站回归；现阶段没有让独立版发送 QQ 消息。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
