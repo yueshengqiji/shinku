@@ -51,7 +51,11 @@ class QQIngressAdapter:
         self.batcher = batcher or AttentionBatcher()
 
     def ingest(self, event: Mapping[str, Any], *, at: float) -> QQIngressResult:
-        message = IncomingMessage.from_event(event)
+        return self.ingest_message(IncomingMessage.from_event(event), at=at)
+
+    def ingest_message(self, message: IncomingMessage, *, at: float) -> QQIngressResult:
+        if not isinstance(message, IncomingMessage):
+            raise TypeError("message must be an IncomingMessage")
         route = self.route_policy.decide(message)
         attention = self.attention_policy.evaluate(message, route)
         closed_batch = self.batcher.push(message, attention, at=at)

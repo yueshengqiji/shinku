@@ -1006,6 +1006,24 @@ opener、目录白名单/文件读取器和注入 loader 准备为 data URL；�
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有连接真实 NapCat、QQ 账号或外部图片地址。
 
+#### 4.2.32 C4-10 NapCat 宿主组合层 —— 洁净室重写
+
+C4-10 增加 `NapCatHost`：将事件解码、QQ 入站路由/注意力、视觉图片准备和出站投递
+组合成可被外层 HTTP/WebSocket/QQ SDK 调用的内核；`from_http()` 只配置 caller，
+不会在构造时发请求。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/adapter.py` | 2026-09-19 | **洁净室重写** | C4-5 入站组合 | 增加已归一消息入口，避免宿主重复解析 OneBot 事件 |
+| `src/shinku/qq/host.py` | 2026-09-19 | **洁净室重写** | C4-1～C4-9 QQ 边界 | 契约 `docs/contracts/c4_10_napcat_host.md`；组合根，不复制 QQ SDK 接线 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_10.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖宿主组合、延迟联网、未配置 transport 和批处理 |
+| `docs/contracts/c4_10_napcat_host.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录宿主组合边界 |
+
+**验收证据：** C4-10 专项测试 **4 passed / 0 failed**；全量回归为 **1133 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有启动真实 NapCat、QQ 账号或监听端口。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1032,7 +1050,8 @@ opener、目录白名单/文件读取器和注入 loader 准备为 data URL；�
   已完成消息投递边界（§4.2.26），C4-5 已完成 QQ 入站适配器组合边界（§4.2.27），C4-6
   已完成 OneBot/NapCat payload 适配（§4.2.28），C4-7 已完成 HTTP action caller（§4.2.29），
   C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
-  （§4.2.31），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
+  （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），下一步进入真实 QQ 适配器
+  联调和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
