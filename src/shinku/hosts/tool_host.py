@@ -16,7 +16,7 @@ from shinku.agent.planner import ChatRuntime, LLMPlanner, PromptBuilder
 from shinku.tools.execution import ExecutionPolicy, ToolHandler
 from shinku.tools.registry import ToolRegistry
 
-__all__ = ["ToolHost", "ToolHostHealth"]
+__all__ = ["ToolHost", "ToolHostHealth", "ToolHostRuntimeHealth"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,26 @@ class ToolHostHealth:
         return {
             "host_id": self.host_id,
             "ready": self.ready,
+            "tool_names": list(self.tool_names),
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class ToolHostRuntimeHealth:
+    """工具宿主与当前模型 runtime 的能力交集。"""
+
+    host_id: str
+    ready: bool
+    native_tools_supported: bool | None
+    tool_names: tuple[str, ...]
+    reason: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "host_id": self.host_id,
+            "ready": self.ready,
+            "native_tools_supported": self.native_tools_supported,
             "tool_names": list(self.tool_names),
             "reason": self.reason,
         }
@@ -51,6 +71,32 @@ class ToolHost:
             reason="" if names else "no_tools_registered",
         )
 
+    def runtime_health(self, runtime: ChatRuntime) -> ToolHostRuntimeHealth:
+        """检查宿主是否能和当前 runtime 共同提供 native tools。
+
+        runtime 没有能力探针时保留 ``None``，兼容离线测试桩和未来宿主；只有
+        明确返回 ``False`` 时才判定不可用，避免把未知 runtime 误报成支持或不支持。
+        """
+
+        base = self.health()
+        supported = self._native_tools_supported(runtime)
+        if not base.ready:
+            reason = base.reason
+            ready = False
+        elif supported is False:
+            reason = "runtime_native_tools_unsupported"
+            ready = False
+        else:
+            reason = "" if supported is True else "runtime_capability_unknown"
+            ready = True
+        return ToolHostRuntimeHealth(
+            host_id=base.host_id,
+            ready=ready,
+            native_tools_supported=supported,
+            tool_names=base.tool_names,
+            reason=reason,
+        )
+
     def build_loop(
         self,
         *,
@@ -64,8 +110,14 @@ class ToolHost:
         prompt_cache_key: str = "",
         temperature: float = 0.2,
     ) -> AgentLoop:
-        specs = self.registry.native_specs(allowed_tool_names=allowed_tool_names)
-        registered = self.registry.view()
+        native_supported = self._native_tools_supported(runtime)
+        tools_enabled = native_supported is not False
+        specs = (
+            self.registry.native_specs(allowed_tool_names=allowed_tool_names)
+            if tools_enabled
+            else []
+        )
+        registered = self.registry.view() if tools_enabled else {}
         handlers: dict[str, ToolHandler] = {}
         allowed = {str(name or "").strip() for name in allowed_tool_names or set()}
         for raw_name, handler in registered.items():
@@ -88,6 +140,16 @@ class ToolHost:
             policy=policy,
             completion_gate=completion_gate,
         )
+
+    @staticmethod
+    def _native_tools_supported(runtime: ChatRuntime) -> bool | None:
+        probe = getattr(runtime, "chat_supports_native_tools", None)
+        if not callable(probe):
+            return None
+        try:
+            return bool(probe())
+        except Exception:
+            return None
 
     def run(
         self,

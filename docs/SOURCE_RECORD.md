@@ -792,6 +792,27 @@ C3-7 增加独立的 `ToolHost` 适配层，把已注册的 handler、native sch
 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
 没有被修改。下一步才是把真实工具宿主和实际供应商/端口做灰度联调。
 
+#### 4.2.20 C3-8 Agent runtime 能力闸门 —— 洁净室重写
+
+C3-8 补上工具宿主与模型能力之间的边界：`ToolHost.runtime_health()` 读取 runtime
+的可选 native-tool 能力探针；能力明确不支持时，宿主既不向模型发送工具 schema，也
+不向 AgentLoop 暴露 handler，避免“模型看见工具、请求却被 runtime 丢掉”的假调用链。
+未知能力保留为未知，兼容离线 runtime 桩，不把探针异常伪装成支持或不支持。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/hosts/tool_host.py` | 2026-09-19 | **洁净室重写** | C3-7 `ToolHost`；C2-5 runtime 能力公开面 | 契约 `docs/contracts/c3_8_runtime_capability_gate.md`；能力探针和工具可见/可执行边界由本仓重新组织 |
+| `tests/test_contract_c3_7.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 增加明确不支持 runtime 的 preflight、schema 和 handler 隔离测试 |
+| `docs/contracts/c3_8_runtime_capability_gate.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录能力闸门和 legacy JSON 后续分流决定 |
+
+**灰度结果：** 不支持 native tools 的 runtime 会得到 `ready=False` 与明确原因，运行时
+请求不携带 `native_tools`，AgentLoop 也没有可执行 handler；没有真实供应商请求、QQ、
+浏览器或后台进程，所以本批仍是离线能力边界测试。
+
+**验收证据：** C3-8 增量专项测试 **1 passed / 0 failed**（C3-7 文件合计 **5 passed /
+0 failed**）；全量回归为 **1079 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个
+既有 warning。本批无新增依赖，旧项目源码没有被修改。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -811,8 +832,8 @@ C3-7 增加独立的 `ToolHost` 适配层，把已注册的 handler、native sch
   服务边界（§4.2.14），C3-3 已完成单轮工具执行与错误封装（§4.2.15），C3-4 已
   完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
   planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），C3-7 已
-  完成独立工具宿主装配与离线灰度（§4.2.19），下一步进入真实宿主和实际供应商/端口
-  的联调灰度。
+  完成独立工具宿主装配与离线灰度（§4.2.19），C3-8 已完成 runtime 能力闸门
+  （§4.2.20），下一步进入真实宿主和实际供应商/端口的联调灰度。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~

@@ -33,6 +33,18 @@ class GrayRuntime:
         return {"speech": "宿主链路完成。"}
 
 
+class UnsupportedNativeRuntime:
+    def __init__(self):
+        self.calls = []
+
+    def chat_supports_native_tools(self):
+        return False
+
+    def call_chat_json(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"speech": "当前模型不支持工具。"}
+
+
 class ToolHostGrayTests(unittest.TestCase):
     def test_health_reports_empty_host_as_not_ready(self) -> None:
         health = ToolHost(ToolRegistry(), host_id="gray").health()
@@ -72,6 +84,25 @@ class ToolHostGrayTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.tool_envelopes[0].data["code"], "tool_blocked")
+
+    def test_runtime_capability_gate_prevents_false_tool_advertising(self) -> None:
+        host = ToolHost(ToolRegistry({"search": HostSearch()}), host_id="gray")
+        runtime = UnsupportedNativeRuntime()
+        health = host.runtime_health(runtime)
+        self.assertEqual(
+            health.as_dict(),
+            {
+                "host_id": "gray",
+                "ready": False,
+                "native_tools_supported": False,
+                "tool_names": ["search"],
+                "reason": "runtime_native_tools_unsupported",
+            },
+        )
+        result = host.run(runtime=runtime, system_prompt="agent")
+        self.assertEqual((result.status, result.final_text), ("completed", "当前模型不支持工具。"))
+        self.assertIsNone(runtime.calls[0]["native_tools"])
+        self.assertEqual(result.tool_envelopes, ())
 
 
 if __name__ == "__main__":
