@@ -21,6 +21,8 @@ from fastapi import FastAPI
 from .. import __version__
 from .. import names
 from ..config import Settings, load_settings
+from ..qq.host import NapCatHost
+from ..qq.webhook import create_napcat_webhook_router
 
 SERVICE = "backend"
 
@@ -44,7 +46,13 @@ def _probe_writable(path: Path) -> tuple[bool, str]:
     return True, "ok"
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    napcat_host: NapCatHost | None = None,
+    napcat_webhook_path: str = "/events/napcat",
+    napcat_event_token: str = "",
+) -> FastAPI:
     resolved = settings or load_settings()
 
     app = FastAPI(
@@ -57,6 +65,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.settings = resolved
+    if napcat_host is not None:
+        app.state.napcat_host = napcat_host
+        app.include_router(
+            create_napcat_webhook_router(
+                napcat_host,
+                path=napcat_webhook_path,
+                event_token=napcat_event_token,
+            )
+        )
 
     @app.get("/health")
     def health() -> dict[str, object]:
