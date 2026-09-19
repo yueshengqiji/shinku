@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
 
 from .loop import AgentDecision, AgentState
+from shinku.tools.invocation import NATIVE_TOOL_CALL_FIELD, legacy_tool_call_to_invocation
 
 __all__ = ["ChatRuntime", "LLMPlanner"]
 
@@ -87,6 +88,11 @@ class LLMPlanner:
         direct = AgentDecision.from_value(response)
         if direct is not None:
             return direct
+        native_payload = response.get(NATIVE_TOOL_CALL_FIELD)
+        if isinstance(native_payload, Mapping):
+            invocation = legacy_tool_call_to_invocation(native_payload)
+            if invocation is not None:
+                return AgentDecision.tool(invocation)
         native = response.get("tool_calls")
         if isinstance(native, list) and native:
             call = native[0]

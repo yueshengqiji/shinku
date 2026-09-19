@@ -813,6 +813,27 @@ C3-8 补上工具宿主与模型能力之间的边界：`ToolHost.runtime_health
 0 failed**）；全量回归为 **1079 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个
 既有 warning。本批无新增依赖，旧项目源码没有被修改。
 
+#### 4.2.21 C3-9 LLMRuntime native tool call 回灌 —— 洁净室重写
+
+C3-9 修复真实 runtime 输出形状与 planner 之间的断点：`LLMRuntime.call_chat_json()` 会
+把供应商 native tool call 归一成线路字段 `_native_tool_call`，`LLMPlanner` 现在把它
+转成统一的 `ToolInvocation`，再交给 C3-3 执行器和 C3-7 宿主。此前 planner 只识别测试
+桩的 `tool_calls` 字段，真实 runtime 结果会落入 `invalid_decision`。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/agent/planner.py` | 2026-09-19 | **洁净室重写** | C3-5 planner；`tools.invocation` 线路字段 | 复用本仓统一转换器 `legacy_tool_call_to_invocation`，不复制供应商响应解析 |
+| `tests/test_contract_c3_8.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 真实 `LLMRuntime` 类 + 本地 fake OpenAI client + ToolHost 端到端回归，不发网络请求 |
+| `docs/contracts/c3_9_runtime_tool_replay.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录 runtime→planner→宿主的 native tool 回灌边界 |
+
+**回归结果：** fake OpenAI client 第 1 轮返回 OpenAI 形状的 native tool call，真实
+`LLMRuntime` 将其归一，planner 回灌给 handler；第 2 轮返回最终 JSON，Agent 完成任务。
+该测试验证的是独立仓库内部线路，不代表远程供应商、QQ 或浏览器已经接通。
+
+**验收证据：** C3-9 专项测试 **1 passed / 0 failed**；全量回归为 **1080 passed /
+0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
+没有被修改。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -833,7 +854,8 @@ C3-8 补上工具宿主与模型能力之间的边界：`ToolHost.runtime_health
   完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
   planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），C3-7 已
   完成独立工具宿主装配与离线灰度（§4.2.19），C3-8 已完成 runtime 能力闸门
-  （§4.2.20），下一步进入真实宿主和实际供应商/端口的联调灰度。
+  （§4.2.20），C3-9 已完成真实 `LLMRuntime` 输出回灌回归（§4.2.21），下一步进入
+  真实宿主和实际供应商/端口的联调灰度。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
