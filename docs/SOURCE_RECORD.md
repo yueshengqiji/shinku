@@ -549,7 +549,7 @@ audit 审计与用量度量（C2-5c），`runtime.py` 用 mixin 合成公开
 | `src/shinku/llm/runtime_capabilities.py` | 6,350 B / 145 行 | **桩**：空输入路径最小等价实现（C2-5b 替换） |
 | `src/shinku/llm/runtime_audit.py` | 5,376 B / 150 行 | **桩**：同上（C2-5c 替换） |
 | `docs/contracts/c2_5_runtime.md` | 9,579 B / 141 行 | 公开面 / 契约事实 / SHINKU_ 环境变量映射 / 桩边界 |
-| `tests/test_contract_c2_5.py` | 36,445 B / 903 行 | 54 用例 + 46 subtest |
+| `tests/test_contract_c2_5.py` | 46,574 B / 1,137 行 | 68 用例 + 51 subtest（含收尾覆盖类 `C2_5CoverageTests` 14 用例） |
 
 **桩边界（本批测试与对拍的范围声明）：** capabilities/audit 桩在「不带
 原生工具、不带用户图片、响应不带 usage、审计关、非 DeepSeek 思考控制、
@@ -571,6 +571,29 @@ docstring/注释全部 Shinku 自写；协议字面量（41 个度量键、事�
 notes）按事实逐字保留。**起草中自查出两处旧名漏网**（`_end` 局部名、
 `_supports_stream_usage` 方法名），已改（`_stop`、`_wants_stream_usage`）——
 边界测试与 tokenize 精确比对为零命中后才算过。
+
+**提交：** 实现 `13d2045` + 收尾覆盖 `a2524ab`（PATCH_BASE = `bbca42a`）。
+
+**六检查实测：**
+
+| 检查 | 结果 |
+| --- | --- |
+| 全量回归 | **1005 passed / 0 failed / 2,286 subtests**（C2-4 基线 937，本批 +68）；junit totals 3,291/0 |
+| 行为对拍 | **363 比对 / 0 差异**（桩等价路径全矩阵，进程内两侧各挂假传输层） |
+| 变异测试 | **75 注入 / 75 抓住 / 0 漏**，恢复后逐文件 sha256 一致 |
+| 私有名 | tokenize 精确比对 **0 命中**（并集 103，namegap 覆盖缺口 0） |
+| 散文重叠 | **0 处**（起草后自查出 3 处 GLM 注释逐字片段，重写归零） |
+| 边界扫描 | forbidden 0 / retired_read 0 / retired_literal 1（同基线）/ 依赖 10 项无新增；path_token 增量全部为文档与测试的来源引用 |
+
+**变异首跑暴露的工具缺陷（已修，进 _kit）：** 首轮变异 11 个「漏」中 4 个是
+批次配置锚点指向错文件（JSON hint 插入在 capabilities、协议判定在 core），
+7 个是**陈旧字节码假漏**——注入写盘后子进程仍命中旧 `__pycache__`，
+变异根本没进被测模块。修复：`run_mutation_suite` 每轮跑前清 `src` 下全部
+`__pycache__`（kitlib）。另发现 7 个真逃逸缺口，由收尾覆盖类
+`C2_5CoverageTests`（14 用例）钉住后退避常量、429/503 状态码分类、
+重试 token、JSON_RE+前缀守卫修复链、缓存提示剥除与重试关键词、
+流式尝试上限（2+rescue）、JSON hint 槽位与契约文案、协议能力边界——
+复跑 **75/75**。
 
 ## 5. 当前未决
 
