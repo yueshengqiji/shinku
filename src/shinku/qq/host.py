@@ -16,6 +16,7 @@ from .napcat import (
     NapCatVisualBatch,
     NapCatVisualInputBridge,
 )
+from .turns import TurnDispatcher
 
 __all__ = ["NapCatHost", "NapCatHostResult"]
 
@@ -64,12 +65,14 @@ class NapCatHost:
         ingress: QQIngressAdapter | None = None,
         visual_bridge: NapCatVisualInputBridge | None = None,
         transport: DeliveryTransport | None = None,
+        turn_dispatcher: TurnDispatcher | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self.decoder = decoder or NapCatEventDecoder()
         self.ingress = ingress or QQIngressAdapter()
         self.visual_bridge = visual_bridge or NapCatVisualInputBridge()
         self.transport = transport
+        self.turn_dispatcher = turn_dispatcher
         self.clock = clock or time.time
 
     @classmethod
@@ -81,6 +84,7 @@ class NapCatHost:
         opener: Callable[..., Any] | None = None,
         visual_bridge: NapCatVisualInputBridge | None = None,
         ingress: QQIngressAdapter | None = None,
+        turn_dispatcher: TurnDispatcher | None = None,
         clock: Callable[[], float] | None = None,
     ) -> "NapCatHost":
         caller = NapCatHttpActionCaller(base_url, access_token=access_token, opener=opener)
@@ -88,6 +92,7 @@ class NapCatHost:
             ingress=ingress,
             visual_bridge=visual_bridge,
             transport=NapCatActionTransport(caller),
+            turn_dispatcher=turn_dispatcher,
             clock=clock,
         )
 
@@ -99,6 +104,7 @@ class NapCatHost:
         opener: Callable[..., Any] | None = None,
         visual_bridge: NapCatVisualInputBridge | None = None,
         ingress: QQIngressAdapter | None = None,
+        turn_dispatcher: TurnDispatcher | None = None,
         clock: Callable[[], float] | None = None,
     ) -> "NapCatHost":
         errors = config.validate()
@@ -114,6 +120,7 @@ class NapCatHost:
             ingress=ingress,
             visual_bridge=visual_bridge,
             transport=NapCatActionTransport(caller),
+            turn_dispatcher=turn_dispatcher,
             clock=clock,
         )
 
@@ -129,7 +136,10 @@ class NapCatHost:
         message = self.decoder.decode(payload)
         ingress = self.ingress.ingest_message(message, at=float(self.clock() if at is None else at))
         visual = self.visual_bridge.build(message)
-        return NapCatHostResult(ingress=ingress, visual=visual)
+        result = NapCatHostResult(ingress=ingress, visual=visual)
+        if self.turn_dispatcher is not None:
+            self.turn_dispatcher.submit(result)
+        return result
 
     def flush(self):
         return self.ingress.flush()
