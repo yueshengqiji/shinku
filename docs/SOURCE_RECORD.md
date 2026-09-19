@@ -348,8 +348,6 @@ Akane 侧存在同类实现。本批是第四种：
 **不改**；它与本原语的字段只有 `status`／`pid` 两项重叠，合并是一次架构决定，
 不属于一个模块迁移批。接入点已记入契约文档 §6 与 §5 的未决项。
 
-## 5. 当前未决
-
 #### 4.2.7 C2-2 LLM 传输客户端 —— 洁净室重写（C2 的真正前置）
 
 **为什么 C2-2 是 `llm_client` 而不是计划里的 `model_service`：** 读上游代码发现
@@ -525,6 +523,55 @@ Akane 侧 `companion_v01/routes/model_services.py` 仅 242 行且是**上一代�
 **本批未做的事：** 未装配——`build_model_services_router` 当前**未注册进 `api/app.py`**
 （属 C4/C6 装配工作）；未碰 `provider_probe.py` 与 `llm_runtime.py`（C2-5）。
 
+#### 4.2.10 C2-5a LLM 调用引擎传输核心 —— 洁净室重写（上游无对应物，规矩二十五第三例；切批 a/3）
+
+**切批决定（2026-09-19 使用者拍板）：** `llm_runtime` 是单类巨石（旧侧真红
+98,409 B / 2,343 行、`LLMRuntime` 84 方法），但方法簇边界清晰，按簇拆
+**三文件三批**：core 传输骨架（本批）/ capabilities 能力协商（C2-5b）/
+audit 审计与用量度量（C2-5c），`runtime.py` 用 mixin 合成公开
+`LLMRuntime(RuntimeCapabilitiesMixin, RuntimeAuditMixin, RuntimeCore)`。
+扇入核查：直接 import 旧 `llm_runtime` 的只有 `engine.py`（C3）、
+`memory_compaction_service.py`（C5）、retrieval 脚本（C5）——全是后续
+批次，**现在定模块边界无兼容债**。
+
+**对照物判定（规矩二十五第三例）：** 上游 `code_shared` 59 个模块里没有
+`llm_runtime.py`，也没有等价的调用编排层。Akane 侧同路径文件
+（77,579 B / 1,916 行）是**上一代**（比真红少 ~21KB），只进 LEGACY 并集；
+行为基线 = Shinku 旧侧真红。`provider_probe.py`（零 import 的诊断 CLI）
+**暂缓迁移**（届时上游 `code_shared/provider_probe.py` 有现成契约可对照）。
+
+**本批交付：**
+
+| 路径 | 字节 / 行 | 说明 |
+| --- | --- | --- |
+| `src/shinku/llm/runtime_core.py` | 71,517 B / 1,825 行 | 传输骨架全量：bundle 构建/热切换、JSON/NDJSON/流式三通道、payload 组装、瞬时重试（`TransientLLMError`）与熔断记账、`StreamTap` 流式顶层 JSON 增量解析、JSON 修复/截断/兜底链、41 键度量与 last-error |
+| `src/shinku/llm/runtime.py` | 1,379 B / 44 行 | 组合根（MRO：capabilities → audit → core） |
+| `src/shinku/llm/runtime_capabilities.py` | 6,350 B / 145 行 | **桩**：空输入路径最小等价实现（C2-5b 替换） |
+| `src/shinku/llm/runtime_audit.py` | 5,376 B / 150 行 | **桩**：同上（C2-5c 替换） |
+| `docs/contracts/c2_5_runtime.md` | 9,579 B / 141 行 | 公开面 / 契约事实 / SHINKU_ 环境变量映射 / 桩边界 |
+| `tests/test_contract_c2_5.py` | 36,445 B / 903 行 | 54 用例 + 46 subtest |
+
+**桩边界（本批测试与对拍的范围声明）：** capabilities/audit 桩在「不带
+原生工具、不带用户图片、响应不带 usage、审计关、非 DeepSeek 思考控制、
+非官方 OpenAI 端」六条件下与旧实现**行为等价**；六条件之外的行为由
+C2-5b/C2-5c 替换桩体后补齐并扩对拍。这六条写进契约文档 §2，不是遗漏。
+
+**配置访问决定（本批新增）：** 新仓 `Settings` 无 LLM 供应商字段；旧
+`config.X` 读取点全部改走 `SHINKU_X` 环境变量（`RuntimeCore._env`），
+键名沿用旧配置属性名（契约事实，待 C4/C6 复查）。
+`PersistentCounterStore` 新仓不存在 → 可选导入退化（`metrics_path=None`
+时两侧同无持久化，对拍安全）。
+
+**表达层：** 旧侧 103 个 `_` 前缀私有名（去 dunder）整组另起
+（`_call_json→_run_json_call`、`_record_metric→_add_metric`、
+`_TopLevelJSONStreamTap→StreamTap`、`_RetryableLLMError→TransientLLMError`、
+实例属性 `_metrics→_counters`/`_last_error→_error_state` 等）；
+docstring/注释全部 Shinku 自写；协议字面量（41 个度量键、事件类型、
+错误类型、`REPLY_MEDIUM_ALIASES`、`SECRET_PATTERNS`、两条 deepseek 画像
+notes）按事实逐字保留。**起草中自查出两处旧名漏网**（`_end` 局部名、
+`_supports_stream_usage` 方法名），已改（`_stop`、`_wants_stream_usage`）——
+边界测试与 tokenize 精确比对为零命中后才算过。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -535,8 +582,11 @@ Akane 侧 `companion_v01/routes/model_services.py` 仅 242 行且是**上一代�
   anthropic 分支返回整个 `AnthropicCompatClient`，切片≈整份文件，故先行）、
   **C2-3 已完成**（§4.2.8，`model_service` + `model_service_config` 一对同批）、
   **C2-4 已完成**（§4.2.9，`routes/model_services`，上游无路由层、对照物取 Akane 侧
-  8,014 B 仅作接线核对）。下一步 **C2-5 = `provider_probe` + `llm_runtime`**
-  （77,579 B 巨石、84 方法，需单独定切批方案）。
+  8,014 B 仅作接线核对）。**C2-5 切批方案已定**（2026-09-19 使用者拍板）：`llm_runtime`
+  拆 core/capabilities/audit 三文件三批，`provider_probe` 暂缓。
+  **C2-5a 已完成**（§4.2.10，传输核心 + 两桩文件 + 组合根）。
+  下一步 **C2-5b = capabilities 完整实现**（原生工具/画像/allowlist/thinking/图片），
+  随后 C2-5c = audit 完整实现（审计/token/缓存用量，全量对拍收口）。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
