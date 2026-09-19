@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shinku.agent.loop import AgentLoop, AgentRunResult
-from shinku.agent.planner import ChatRuntime, LLMPlanner, PromptBuilder
+from shinku.agent.planner import ChatRuntime, LLMPlanner, PromptBuilder, UserImagesBuilder
 from shinku.tools.execution import ExecutionPolicy, ToolHandler
 from shinku.tools.registry import ToolRegistry
 
@@ -104,6 +104,7 @@ class ToolHost:
         system_prompt: str,
         allowed_tool_names: set[str] | None = None,
         build_user_prompt: PromptBuilder | None = None,
+        build_user_images: UserImagesBuilder | None = None,
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
         completion_gate: Callable[[Any, str], bool] | None = None,
@@ -130,6 +131,7 @@ class ToolHost:
             system_prompt=system_prompt,
             tool_specs=specs,
             build_user_prompt=build_user_prompt,
+            build_user_images=build_user_images,
             prompt_cache_key=prompt_cache_key,
             temperature=temperature,
         )
@@ -161,6 +163,7 @@ class ToolHost:
         initial_transcript: list[dict[str, Any]] | None = None,
         allowed_tool_names: set[str] | None = None,
         build_user_prompt: PromptBuilder | None = None,
+        build_user_images: UserImagesBuilder | None = None,
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
         completion_gate: Callable[[Any, str], bool] | None = None,
@@ -172,6 +175,7 @@ class ToolHost:
             system_prompt=system_prompt,
             allowed_tool_names=allowed_tool_names,
             build_user_prompt=build_user_prompt,
+            build_user_images=build_user_images,
             max_rounds=max_rounds,
             policy=policy,
             completion_gate=completion_gate,

@@ -14,7 +14,7 @@ from typing import Any, Protocol
 from .loop import AgentDecision, AgentState
 from shinku.tools.invocation import NATIVE_TOOL_CALL_FIELD, legacy_tool_call_to_invocation
 
-__all__ = ["ChatRuntime", "LLMPlanner"]
+__all__ = ["ChatRuntime", "LLMPlanner", "PromptBuilder", "UserImagesBuilder"]
 
 
 class ChatRuntime(Protocol):
@@ -22,6 +22,7 @@ class ChatRuntime(Protocol):
 
 
 PromptBuilder = Callable[[AgentState], str]
+UserImagesBuilder = Callable[[AgentState], list[dict[str, Any]]]
 
 
 def _default_user_prompt(state: AgentState) -> str:
@@ -46,6 +47,7 @@ class LLMPlanner:
         system_prompt: str,
         tool_specs: Sequence[dict[str, Any]] | None = None,
         build_user_prompt: PromptBuilder | None = None,
+        build_user_images: UserImagesBuilder | None = None,
         temperature: float = 0.2,
         prompt_cache_key: str = "",
         native_tool_choice: Any = "auto",
@@ -55,18 +57,23 @@ class LLMPlanner:
         self.system_prompt = str(system_prompt or "").strip()
         self.tool_specs = [dict(item) for item in (tool_specs or []) if isinstance(item, Mapping)]
         self.build_user_prompt = build_user_prompt or _default_user_prompt
+        self.build_user_images = build_user_images
         self.temperature = temperature
         self.prompt_cache_key = str(prompt_cache_key or "")
         self.native_tool_choice = native_tool_choice
         self.fallback_text = str(fallback_text or "").strip()
 
     def __call__(self, *, state: AgentState) -> AgentDecision | None:
+        user_images = self.build_user_images(state) if self.build_user_images is not None else None
+        if not isinstance(user_images, list):
+            user_images = []
         response = self.runtime.call_chat_json(
             system_prompt=self.system_prompt,
             user_prompt=str(self.build_user_prompt(state) or ""),
             fallback={"kind": "final", "text": self.fallback_text},
             temperature=self.temperature,
             prompt_cache_key=self.prompt_cache_key,
+            user_images=user_images or None,
             native_tools=self.tool_specs or None,
             native_tool_choice=self.native_tool_choice if self.tool_specs else "",
             history_turns=self._history(state),

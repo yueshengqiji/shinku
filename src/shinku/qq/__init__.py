@@ -6,6 +6,7 @@ from .routing import ReplyRoutePolicy, RouteDecision
 from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, OutgoingSegment, build_reply, deliver
 from .adapter import QQIngressAdapter, QQIngressResult
 from .host import NapCatHost, NapCatHostResult
+from .agent_bridge import QQAgentBridge, QQAgentReply
 from .turns import NapCatTurnDispatcher, QQTurn, TurnDispatchReceipt
 from .config import NapCatConnectionConfig
 from .webhook import create_napcat_webhook_router
@@ -41,6 +42,8 @@ __all__ = [
     "QQIngressResult",
     "NapCatHost",
     "NapCatHostResult",
+    "QQAgentBridge",
+    "QQAgentReply",
     "NapCatTurnDispatcher",
     "QQTurn",
     "TurnDispatchReceipt",

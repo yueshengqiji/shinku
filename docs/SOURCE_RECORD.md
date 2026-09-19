@@ -1159,6 +1159,26 @@ C4-18 增加 `NapCatTurnDispatcher` 与 `QQTurn`：webhook 入站后不直接阻
 0 failed**；全量回归 **1151 passed / 0 failed**，2286 个 subTest 保持通过，1 个既有
 warning；compileall 与 diff check 通过。下一步进入独立 Agent/LLM handler 装配。
 
+#### 4.2.41 C4-19 QQ Agent/LLM 桥接 —— 洁净室重写
+
+C4-19 增加 `QQAgentBridge`：把 `QQTurn` 转成 AgentLoop 的 transcript 和上下文，使用
+`ToolHost` 注入工具，将视觉输入通过 `user_images` 传给 LLMRuntime，并把完成或等待用户
+的文本构造成统一 `OutgoingMessage`。sender 未注入时严格 dry-run；本批没有读取旧项目
+配置、persona 或供应商密钥，也没有启用真实 NapCat 出站。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/agent_bridge.py` | 2026-09-19 | **洁净室重写** | C3 AgentLoop/ToolHost；C4-18 QQTurn | 契约 `docs/contracts/c4_19_agent_bridge.md`；依赖注入桥接 |
+| `src/shinku/agent/planner.py` | 2026-09-19 | **洁净室重写** | C2-5 LLMRuntime | 增加可选 `user_images` builder，默认调用形状不变 |
+| `src/shinku/hosts/tool_host.py` | 2026-09-19 | **洁净室重写** | C3-7 ToolHost | 透传可选视觉输入 builder，默认行为不变 |
+| `tests/test_contract_c4_19.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖 Agent、图片、出站和 dry-run |
+| `docs/contracts/c4_19_agent_bridge.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录 Agent/LLM 桥接边界 |
+
+**验收证据：** C4-19 专项测试 **3 passed / 0 failed**；关联 C3 回归 **10 passed / 0
+failed**；全量回归 **1154 passed / 0 failed**，2286 个 subTest 保持通过，1 个既有
+warning；compileall 与 diff check 通过。下一步是注入独立 persona/context、真实 runtime
+配置和受控 sender，仍保持默认 dry-run。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1189,7 +1209,8 @@ warning；compileall 与 diff check 通过。下一步进入独立 Agent/LLM han
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
   （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
   （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38），C4-17 已完成并行 forward
-  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40）。下一步是先装配独立版 Agent/LLM 处理器，再由用户确认后 reload/
+  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40），C4-19 已完成 QQ Agent/LLM 桥接（§4.2.41）。下一步是注入独立 persona/context、真实 runtime
+  配置和受控 sender，再由用户确认后 reload/
   restart NapCat，最后做受控出站回归；现阶段没有让独立版发送 QQ 消息。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
