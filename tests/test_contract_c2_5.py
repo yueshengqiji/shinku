@@ -16,8 +16,10 @@ token 用量 / 缓存提示的完整行为属 C2-5b / C2-5c 的测试面。
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -795,6 +797,238 @@ class ScanToolCallTests(unittest.TestCase):
             runtime._scan_leading_tool_call('{"tool_call": {"type": "y"}}'),
             ("object", {"type": "y"}),
         )
+
+
+# --------------------------------------------------------------------------- #
+# C2-5a 收尾覆盖：为变异证据补齐容易被主流程掩盖的边界
+# --------------------------------------------------------------------------- #
+
+
+class C2_5CoverageTests(unittest.TestCase):
+    """覆盖契约中不会自然经过主调用链的细小分支。
+
+    这些测试不是为了扩大 C2-5a 的能力范围，而是确保已有的重试、解析、
+    流式事件、缓存兼容桩和错误诊断约定不会因为一处局部改动而静默退化。
+    """
+
+    def test_retry_classifier_covers_status_codes_and_message_tokens(self) -> None:
+        for status in (429, 503):
+            error = RuntimeError("gateway failure")
+            error.status_code = status
+            with self.subTest(status=status):
+                self.assertTrue(core_mod.is_retryable_llm_error(error))
+        self.assertTrue(core_mod.is_retryable_llm_error(RuntimeError("too many requests")))
+
+    def test_retry_uses_declared_backoff(self) -> None:
+        runtime = _make_runtime(
+            scripts=[
+                ("raise", RuntimeError("429")),
+                ("response", FakeResponse('{"speech": "ok"}')),
+            ]
+        )
+        with mock.patch("shinku.llm.runtime_core.time.sleep") as sleep:
+            result = runtime.call_chat_json(
+                system_prompt="s", user_prompt="u", fallback={"fallback": 1}
+            )
+        self.assertEqual(result, {"speech": "ok"})
+        sleep.assert_called_once_with(0.8)
+
+    def test_streamtap_newline_split_and_segment_dedup(self) -> None:
+        newline_tap = StreamTap()
+        newline_events = newline_tap.feed('{"speech": "第一句\n第二句"}')
+        self.assertEqual(
+            [event["text"] for event in newline_events if event["type"] == "speech_segment"],
+            ["第一句"],
+        )
+        escaped_tap = StreamTap()
+        escaped_tap.feed('{"speech": "第一句\\n第二句"}')
+        self.assertEqual(escaped_tap.latest_speech, "第一句\n第二句")
+
+        duplicate_tap = StreamTap()
+        duplicate_events = duplicate_tap.feed(
+            '{"speech_segments": ["同一句。", "同一句。"]}'
+        )
+        self.assertEqual(
+            len([event for event in duplicate_events if event["type"] == "speech_segment"]),
+            1,
+        )
+
+    def test_rescue_sentinel_and_failure_error_are_stable(self) -> None:
+        runtime = _make_runtime()
+        kwargs = dict(
+            bundle=runtime.chat,
+            system_prompt="s",
+            user_prompt="u",
+            temperature=0.7,
+            prompt_cache_key="",
+            user_images=None,
+            native_tools=None,
+            native_tool_choice="",
+            system_extra_blocks=None,
+            history_turns=None,
+            prompt_audit_sections=None,
+        )
+        with mock.patch.object(
+            runtime,
+            "_run_json_call",
+            return_value={"__shinku_stream_rescue_fallback__": True},
+        ):
+            rescued, error = runtime._rescue_stream_via_json(**kwargs)
+        self.assertIsNone(rescued)
+        self.assertEqual(error, "stream_json_rescue_failed")
+        self.assertEqual(_metrics(runtime, "chat_stream_rescue_failures"), 1)
+
+        with mock.patch.object(runtime, "_run_json_call", side_effect=RuntimeError("boom")):
+            rescued, error = runtime._rescue_stream_via_json(**kwargs)
+        self.assertIsNone(rescued)
+        self.assertEqual(error, "boom")
+        self.assertEqual(_metrics(runtime, "chat_stream_rescue_failures"), 2)
+
+    def test_partial_recovery_limits_segment_size_and_count(self) -> None:
+        runtime = _make_runtime()
+        raw = '{"speech_segments": [' + ",".join(
+            '"' + ("x" * 600) + '"' for _ in range(5)
+        ) + "]}"
+        recovered = runtime._recover_partial(raw, fallback={"fallback": 1})
+        self.assertIsNotNone(recovered)
+        segments = recovered["speech_segments"]
+        self.assertEqual(len(segments), 3)
+        self.assertTrue(all(len(segment) == 500 for segment in segments))
+
+    def test_json_re_and_prefix_guards_keep_repair_paths(self) -> None:
+        runtime = _make_runtime()
+        self.assertIsNone(runtime._first_json_object('[{"a": 1}]'))
+        self.assertIsNone(runtime._first_json_object(', {"a": 1}'))
+
+        fake_json_repair = types.ModuleType("json_repair")
+        def repair_json(text: str, return_objects: bool):
+            if str(text).startswith("prefix "):
+                return None
+            return {"repaired": True} if return_objects else '{"repaired": true}'
+
+        fake_json_repair.repair_json = repair_json
+        with mock.patch.dict(sys.modules, {"json_repair": fake_json_repair}):
+            self.assertEqual(runtime._heal_json('{"a": 1,}'), {"repaired": True})
+            self.assertEqual(
+                runtime._parse_json('prefix {"a": 1,} suffix'),
+                {"repaired": True},
+            )
+
+    def test_parse_failure_head_keeps_diagnostic_window(self) -> None:
+        runtime = _make_runtime()
+        raw = "头部样本-" + ("x" * 300)
+        runtime._note_parse_failure(raw, phase="test")
+        message = runtime.snapshot_last_error()["message"]
+        self.assertIn(raw[:200], message)
+
+    def test_redaction_covers_each_secret_pattern_independently(self) -> None:
+        runtime = _make_runtime()
+        text = runtime._redact_secrets(
+            "Bearer abcdefgh1234 api_key=plain-secret-123 sk-abcdefgh1234"
+        )
+        self.assertNotIn("abcdefgh1234", text)
+        self.assertNotIn("plain-secret-123", text)
+        self.assertNotIn("sk-abcdefgh1234", text)
+
+    def test_json_hint_keeps_slot_and_exact_contract_text(self) -> None:
+        runtime = _make_runtime(protocol="openai")
+        payload = runtime._build_payload(
+            bundle=runtime.chat,
+            system_prompt="stable",
+            user_prompt="question",
+            temperature=0.1,
+            json_mode=True,
+        )
+        self.assertEqual(payload["messages"][1]["role"], "system")
+        self.assertEqual(
+            payload["messages"][1]["content"],
+            "（本轮只输出一个合法的 JSON object，不要输出多余文字。）",
+        )
+
+    def test_protocol_and_host_capability_boundaries(self) -> None:
+        openai = _make_runtime(protocol="openai")
+        ollama = _make_runtime(protocol="ollama")
+        unknown = _make_runtime(protocol="gateway-x")
+        anthropic = _make_runtime(protocol="anthropic")
+        self.assertTrue(openai._supports_multi_system(openai.chat))
+        self.assertTrue(ollama._supports_multi_system(ollama.chat))
+        self.assertFalse(unknown._supports_multi_system(unknown.chat))
+        self.assertTrue(anthropic._is_anthropic(anthropic.chat))
+        self.assertFalse(openai._is_anthropic(openai.chat))
+        self.assertTrue(openai._is_official_openai("https://api.openai.com/v1"))
+        self.assertTrue(openai._is_official_openai("https://gateway.openai.com/v1"))
+        self.assertFalse(openai._is_official_openai("https://not-openai.example/v1"))
+
+    def test_audit_stub_helpers_preserve_declared_shapes(self) -> None:
+        runtime = _make_runtime()
+        self.assertEqual(runtime._estimate_tokens("中文abcd"), 3)
+        section = runtime._audit_section("prompt", "abc")
+        self.assertEqual(len(section["sha256_16"]), 16)
+        self.assertEqual(runtime._coerce_cache_key("abc"), "shinku:abc")
+        self.assertEqual(runtime._coerce_cache_retention("in_memory"), "in_memory")
+        self.assertEqual(runtime._coerce_cache_retention("24h"), "24h")
+        self.assertEqual(runtime._coerce_cache_retention("forever"), "")
+
+    def test_cache_compatibility_helpers_keep_only_supported_retry_fields(self) -> None:
+        runtime = _make_runtime()
+        payload = {
+            "prompt_cache_key": "shinku:key",
+            "prompt_cache_retention": "24h",
+            "model": "m",
+        }
+        stripped = runtime._strip_cache_hints(payload)
+        self.assertEqual(stripped, {"model": "m"})
+        for message in (
+            "unexpected keyword foo",
+            "unknown parameter prompt_cache_retention",
+            "unrecognized request argument",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(runtime._retry_without_cache_hints(RuntimeError(message)))
+
+    def test_ndjson_parser_and_close_fallback_are_defensive(self) -> None:
+        runtime = _make_runtime()
+        remaining, events = runtime._drain_buffer('{"type":"a"}\n{"type":"b"}\n')
+        self.assertEqual(remaining, "")
+        self.assertEqual([event["type"] for event in events], ["a", "b"])
+        self.assertIsNone(runtime._parse_line("[1, 2]"))
+
+        closed: list[bool] = []
+
+        class Raw:
+            def close(self):
+                closed.append(True)
+
+        class Response:
+            _response = Raw()
+
+            def close(self):
+                raise RuntimeError("primary close failed")
+
+        runtime._close_response(Response())
+        self.assertEqual(closed, [True])
+
+    def test_stream_retry_has_fixed_attempt_count_and_delay(self) -> None:
+        runtime = _make_runtime()
+        with mock.patch.object(
+            runtime,
+            "_dispatch_completion",
+            side_effect=RuntimeError("connection reset mid-stream"),
+        ) as dispatch, mock.patch("shinku.llm.runtime_core.time.sleep") as sleep:
+            generator = runtime.stream_chat_json(
+                system_prompt="s", user_prompt="u", fallback={"fallback": 1}
+            )
+            while True:
+                try:
+                    next(generator)
+                except StopIteration as stop:
+                    result = stop.value
+                    break
+        self.assertEqual(result.parsed, {"fallback": 1})
+        # 两次空流连接尝试后再进行一次非流式 rescue；若上限被改为 3，
+        # dispatch 会多出一轮，变异测试应立即失败。
+        self.assertEqual(dispatch.call_count, 3)
+        sleep.assert_called_once_with(1.0)
 
 
 # --------------------------------------------------------------------------- #
