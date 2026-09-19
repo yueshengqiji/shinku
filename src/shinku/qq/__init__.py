@@ -13,6 +13,7 @@ from .napcat import (
     NapCatVisualBatch,
     NapCatVisualInput,
     NapCatVisualInputBridge,
+    NapCatImageMaterializer,
 )
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "NapCatVisualBatch",
     "NapCatVisualInput",
     "NapCatVisualInputBridge",
+    "NapCatImageMaterializer",
     "QQIngressAdapter",
     "QQIngressResult",
     "OutgoingMessage",

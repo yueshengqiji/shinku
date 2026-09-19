@@ -989,6 +989,23 @@ C4-8 增加 `NapCatEventDecoder` 与 `NapCatVisualInputBridge`：前者解码 we
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有连接真实 NapCat、QQ 账号、网络或本地图片。
 
+#### 4.2.31 C4-9 图片 materializer —— 洁净室重写
+
+C4-9 增加 `NapCatImageMaterializer`：远程 URL、本地路径和 media id 分别通过受控的
+opener、目录白名单/文件读取器和注入 loader 准备为 data URL；超时、大小和路径边界
+失败时保留 pending，不生成伪造的“看不到图片”结论。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/napcat.py` | 2026-09-19 | **洁净室重写** | C4-8 视觉引用桥 | 契约 `docs/contracts/c4_9_image_materializer.md`；受控 HTTP/文件/media 边界 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_9.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖远程、本地、白名单、media id、大小限制和视觉桥接 |
+| `docs/contracts/c4_9_image_materializer.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录 materializer 边界 |
+
+**验收证据：** C4-9 专项测试 **5 passed / 0 failed**；全量回归为 **1129 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有连接真实 NapCat、QQ 账号或外部图片地址。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1014,8 +1031,8 @@ C4-8 增加 `NapCatEventDecoder` 与 `NapCatVisualInputBridge`：前者解码 we
   已完成确定性回复路由（§4.2.24），C4-3 已完成注意力门与短窗口合并（§4.2.25），C4-4
   已完成消息投递边界（§4.2.26），C4-5 已完成 QQ 入站适配器组合边界（§4.2.27），C4-6
   已完成 OneBot/NapCat payload 适配（§4.2.28），C4-7 已完成 HTTP action caller（§4.2.29），
-  C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），下一步进入真实 QQ 适配器联调和
-  注入式图片 materializer 接线。
+  C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
+  （§4.2.31），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~

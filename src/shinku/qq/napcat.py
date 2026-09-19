@@ -6,9 +6,11 @@ from collections.abc import Callable, Mapping
 import base64
 from dataclasses import dataclass
 import json
+import mimetypes
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .delivery import DeliveryTransport, OutgoingMessage
@@ -22,6 +24,7 @@ __all__ = [
     "NapCatVisualInput",
     "NapCatVisualInputBridge",
     "NapCatVisualBatch",
+    "NapCatImageMaterializer",
 ]
 
 
@@ -143,6 +146,141 @@ class NapCatVisualInputBridge:
             mime = "image/png"
         encoded = base64.b64encode(bytes(value)).decode("ascii")
         return f"data:{mime};base64,{encoded}"
+
+
+class NapCatImageMaterializer:
+    """按显式引用把图片准备成 data URL。
+
+    这层可以实际读取本地图片或请求远程图片，但只有上层主动调用
+    ``NapCatVisualInputBridge(materialize=...)`` 时才会发生。``media_id`` 必须由
+    宿主注入 loader，避免把 NapCat action 调用偷偷塞进视觉路径。
+    """
+
+    def __init__(
+        self,
+        *,
+        url_opener: Callable[..., Any] | None = None,
+        file_reader: Callable[[str], bytes] | None = None,
+        media_loader: Callable[[str], Any] | None = None,
+        allowed_roots: tuple[str, ...] = (),
+        timeout: float = 10.0,
+        max_bytes: int = 8 * 1024 * 1024,
+    ) -> None:
+        if timeout <= 0:
+            raise ValueError("image materializer timeout must be positive")
+        if max_bytes <= 0:
+            raise ValueError("image materializer max_bytes must be positive")
+        self._url_opener = url_opener or urlopen
+        self._file_reader = file_reader or (lambda path: Path(path).read_bytes())
+        self._media_loader = media_loader
+        self._allowed_roots = tuple(Path(root).resolve() for root in allowed_roots if str(root).strip())
+        self.timeout = float(timeout)
+        self.max_bytes = int(max_bytes)
+
+    def __call__(self, attachment: Mapping[str, Any]) -> str | None:
+        if not isinstance(attachment, Mapping):
+            return None
+        url = str(attachment.get("url") or "").strip()
+        if url.lower().startswith("data:image/"):
+            return url
+        if url.lower().startswith(("http://", "https://")):
+            return self._from_url(url, attachment)
+
+        local_path = str(attachment.get("local_path") or "").strip()
+        if local_path:
+            return self._from_local(local_path, attachment)
+
+        media_id = str(attachment.get("media_id") or "").strip()
+        if media_id and self._media_loader is not None:
+            try:
+                value = self._media_loader(media_id)
+            except Exception:
+                return None
+            return self._value_to_data_url(value, attachment, "")
+        return None
+
+    def _from_url(self, url: str, attachment: Mapping[str, Any]) -> str | None:
+        request = Request(url, headers={"Accept": "image/*"}, method="GET")
+        try:
+            response = self._url_opener(request, timeout=self.timeout)
+            payload = self._read_limited(response)
+        except (HTTPError, URLError, OSError, ValueError):
+            return None
+        headers = getattr(response, "headers", None)
+        response_mime = ""
+        if headers is not None:
+            try:
+                response_mime = str(headers.get_content_type() or "")
+            except (AttributeError, TypeError):
+                response_mime = ""
+        mime = response_mime if response_mime.lower().startswith("image/") else ""
+        if not mime:
+            mime = str(attachment.get("mime_type") or attachment.get("mime") or "").strip()
+        if not mime:
+            mime = mimetypes.guess_type(url)[0] or ""
+        return self._value_to_data_url(payload, attachment, mime)
+
+    def _from_local(self, raw_path: str, attachment: Mapping[str, Any]) -> str | None:
+        path = self._path_from_reference(raw_path)
+        if path is None or not self._path_allowed(path):
+            return None
+        try:
+            payload = self._read_limited(self._file_reader(str(path)))
+        except (OSError, ValueError, TypeError):
+            return None
+        mime = str(attachment.get("mime_type") or attachment.get("mime") or "").strip()
+        mime = mime or mimetypes.guess_type(str(path))[0] or ""
+        return self._value_to_data_url(payload, attachment, mime)
+
+    def _read_limited(self, source: Any) -> bytes:
+        if isinstance(source, (bytes, bytearray)):
+            payload = bytes(source)
+        else:
+            reader = getattr(source, "read", None)
+            if not callable(reader):
+                raise ValueError("image source is not readable")
+            payload = reader(self.max_bytes + 1)
+            if not isinstance(payload, (bytes, bytearray)):
+                raise ValueError("image source did not return bytes")
+            payload = bytes(payload)
+        if not payload or len(payload) > self.max_bytes:
+            raise ValueError("image payload exceeds materializer limit")
+        return payload
+
+    def _path_allowed(self, path: Path) -> bool:
+        if not self._allowed_roots:
+            return True
+        resolved = path.resolve()
+        return any(resolved == root or root in resolved.parents for root in self._allowed_roots)
+
+    @staticmethod
+    def _path_from_reference(raw_path: str) -> Path | None:
+        value = str(raw_path or "").strip()
+        if not value:
+            return None
+        if value.lower().startswith("file://"):
+            parsed = urlparse(value)
+            path = unquote(parsed.path or "")
+            if parsed.netloc and parsed.netloc.lower() != "localhost":
+                path = f"{parsed.netloc}:{path}" if len(parsed.netloc) == 1 else f"//{parsed.netloc}{path}"
+            if len(path) >= 3 and path[0] == "/" and path[2] == ":":
+                path = path[1:]
+            return Path(path)
+        return Path(value)
+
+    @staticmethod
+    def _value_to_data_url(value: Any, attachment: Mapping[str, Any], mime: str) -> str | None:
+        if isinstance(value, Mapping):
+            value = value.get("data_url") or value.get("dataUrl") or value.get("content")
+        if isinstance(value, str):
+            return value.strip() if value.lower().startswith("data:image/") else None
+        if not isinstance(value, (bytes, bytearray)):
+            return None
+        normalized_mime = str(mime or attachment.get("mime_type") or attachment.get("mime") or "image/png").strip()
+        if not normalized_mime.lower().startswith("image/"):
+            normalized_mime = "image/png"
+        encoded = base64.b64encode(bytes(value)).decode("ascii")
+        return f"data:{normalized_mime};base64,{encoded}"
 
 
 class NapCatActionTransport(DeliveryTransport):
