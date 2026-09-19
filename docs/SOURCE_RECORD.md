@@ -1198,7 +1198,7 @@ C4-20 增加显式主人设加载器和 QQ Agent 装配配置：主人设只从
 | `tests/test_contract_c4_20.py` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖加载、校验与 dry-run |
 | `docs/contracts/c4_20_agent_runtime_assembly.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录安全装配边界 |
 
-**验收证据：** C4-20 专项测试 **5 passed / 0 failed**；全量回归 **1159 passed / 0
+**验收证据：** C4-20 专项测试 **6 passed / 0 failed**；全量回归 **1160 passed / 0
 failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 diff check 通过。
 本批没有读取旧项目 persona、没有使用真实密钥、没有重启 NapCat，也没有开启真实 QQ
 出站。
