@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, MutableMapping
 
 from . import __version__
 from . import names
@@ -53,6 +53,37 @@ class Settings:
             if path.is_file():
                 return path.read_text(encoding="utf-8").strip()
         return ""
+
+
+def load_project_env(
+    environ: MutableMapping[str, str] | None = None,
+    *,
+    path: str | Path | None = None,
+) -> Path | None:
+    """读取独立项目 ``.env``，只接纳 ``SHINKU_*`` 键。
+
+    shell 环境优先于文件；这样不会用仓库里的样例覆盖启动器或服务管理器已经
+    注入的值。该函数不做变量展开，也不打印任何 value，避免把 token 带进日志。
+    """
+
+    env = os.environ if environ is None else environ
+    configured_path = path or env.get("SHINKU_ENV_FILE") or ".env"
+    env_path = Path(configured_path)
+    if not env_path.is_file():
+        return None
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key.startswith("SHINKU_") or not key.replace("_", "").isalnum():
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        env.setdefault(key, value)
+    return env_path
 
 
 def load_settings(environ: Mapping[str, str] | None = None) -> Settings:

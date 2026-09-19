@@ -21,7 +21,7 @@ from typing import Sequence
 
 from . import __version__
 from . import names
-from .config import ensure_directories, load_settings
+from .config import ensure_directories, load_project_env, load_settings
 from .qq.config import NapCatConnectionConfig
 from .qq.host import NapCatHost
 from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
@@ -146,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    load_project_env()
 
     if args.command == "doctor":
         return _cmd_doctor()

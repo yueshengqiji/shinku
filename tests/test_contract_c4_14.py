@@ -19,6 +19,7 @@ def isolated_env(root: Path) -> dict[str, str]:
         names.DATA_ROOT_ENV: str(root / "data"),
         names.CONFIG_ROOT_ENV: str(root / "config"),
         names.LOG_ROOT_ENV: str(root / "logs"),
+        "SHINKU_ENV_FILE": str(root / "missing.env"),
     }
 
 

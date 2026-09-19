@@ -1092,6 +1092,24 @@ materializer 和 webhook 路由。
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有启动真实后端端口或连接 NapCat。
 
+#### 4.2.37 C4-15 独立 `.env` 加载 —— 洁净室重写
+
+C4-15 增加 `load_project_env()`，让 CLI 读取 `SHINKU_ENV_FILE` 或当前目录 `.env`，
+且只接纳 `SHINKU_*` 键、保持 shell 优先；这样 `.env.example` 的配置说明与启动行为一致。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/config.py` | 2026-09-19 | **洁净室重写** | B1 配置加载 | 契约 `docs/contracts/c4_15_project_env_loader.md`；独立白名单解析 |
+| `src/shinku/cli.py` | 2026-09-19 | **洁净室重写** | B1 CLI 启动 | 仅在 doctor/serve 流程显式加载 `.env` |
+| `tests/test_cli.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 既有 CLI 契约 | 测试环境显式指向不存在 env 文件，避免隐式污染 |
+| `tests/test_contract_c4_14.py` | 2026-09-19 | `INDEPENDENT_KEEP` | C4-14 启动器 | 测试环境显式隔离 env 文件 |
+| `tests/test_contract_c4_15.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖解析白名单、优先级和脱敏 |
+| `docs/contracts/c4_15_project_env_loader.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录 `.env` 边界 |
+
+**验收证据：** C4-15 专项测试 **3 passed / 0 failed**；全量回归为 **1149 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有启动真实后端或连接 NapCat。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1120,8 +1138,8 @@ materializer 和 webhook 路由。
   C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
   （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
-  （§4.2.35），C4-14 已完成启动器接线（§4.2.36），下一步进入真实 QQ 适配器联调
-  和注入式 materializer 接线。
+  （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
+  （§4.2.37），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
