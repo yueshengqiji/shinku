@@ -464,6 +464,67 @@ C2-4 = `routes/model_services`、C2-5 = `provider_probe` + `llm_runtime`。
 `apply_model_service_settings` 当前**无消费者**（`routes/model_services` 属 C2-4，
 `provider_probe` 与 `llm_runtime` 属 C2-5），属「可被装配的配置件」。
 
+#### 4.2.9 C2-4 模型服务控制中心路由 —— 洁净室重写（上游无路由层，规矩二十五第二例）
+
+**为什么这一批是「上游无对应物」的第二例：** `code_shared` 共享包里**根本没有路由层**——
+59 个模块既没有 `model_services.py`，连 `routes/` 子目录都不存在。路由是项目侧把原语
+拼成 HTTP 面的那一层：上游只提供 `model_service`／`model_service_config` 原语（C2-3 已落），
+不提供把它们挂到 `/control-center/model-services` 的代码。所以本批对照物**不能取上游**，
+只能取 Akane 侧同路径文件（8,014 B / 242 行）做**接线核对**——分辨「哪些是共享契约、
+哪些是 Shinku 项目策略」——行为基线则取 Shinku 旧侧同路径（16,818 B / 397 行），
+因为 Akane 那份是**上一代单服务形态**（只有 `GET/POST /control-center/model-service` +
+`/models` + `/test`，没有多供应商面），对拍它等于什么都没对。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/api/model_services.py` | 2026-09-19 | **洁净室重写** | **上游无路由层**（规矩二十五）；接线核对取 Akane 侧 `companion_v01/routes/model_services.py` 8,014 B / 242 行；行为基线取 Shinku 旧侧同路径 16,818 B / 397 行 | 契约 `docs/contracts/c2_4_model_services.md`；表达层：Shinku 撰写（按本仓 HTTP 层约定落 `api/`，沿用 `api/sessions.py` 的 `build_sessions_router` 先例；私有助手整组另起：`_caller_is_local`／`_json_body`／`_saved_api_key_for`／`_emit_metric`／`_emit_log`／`_truthy`／`_normalize_model_ids`；整页快照读取、按供应商保存、刷新模型、切换激活项、本地请求闸门、度量与结构化日志均为独立实现） |
+| `tests/test_contract_c2_4.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；两侧各挂真 `TestClient` 打相同请求比对 status/body/cache-control/配置模块变更/注册表字节 |
+| `docs/contracts/c2_4_model_services.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；§0 三项决定（对拍基线 / 丢掉的单服务端点 / 配置模块属性名）各配理由 |
+
+**对照物判定（规矩二十五第二例「上游无对应物」）：** 上游 `code_shared` 无路由层，
+Akane 侧 `companion_v01/routes/model_services.py` 仅 242 行且是**上一代单服务形态**，
+既不能当真实现也不能当行为基线，**只用于接线核对**（分辨共享契约 vs 项目策略 +
+进 `LEGACY_NAMES` 并集）；真红的行为基线是旧侧 397 行（多供应商面、`/{provider_id}/config`、
+`/{provider_id}/models`、`/select` 都在里面）。
+
+**本批丢掉的 4 个向后兼容单服务端点（登记为契约决定，契约 §0.2）：** 旧侧 397 行里有
+`# Backward-compatible single-service endpoints` 一组（`/control-center/model-service` 单数、
+`/models`、`/test`）。全仓 grep `control-center/model-service`（单数）结果显示：**Shinku 仓内
+除它自己与 `docs/PROJECT_MAP.md` 一行过时描述外零消费者**；唯一消费方是 **Akane 自己的**
+`web/app.js` 与 `desktop_pet_next`——另一个产品。⇒ 本批不搬这 4 个端点，
+`connection_tester`／`require_model` 参数随之不需要。这条有 grep 证据支撑，不是「顺手删」。
+
+**六项证据：**
+
+1. 契约文档 `docs/contracts/c2_4_model_services.md`（13,107 B / 273 行：端点清单、请求/响应
+   字段、本地请求闸门、错误信封、度量与日志事件名、配置写回模块的属性名、§0 三项决定各配理由）；
+2. 独立测试 `tests/test_contract_c2_4.py`（**72 个用例 / 16 个测试类（3 个 TestCase + 13 个
+   假件类）/ 14 个 subTest 调用点**，37,905 B / 892 行）；
+3. 实现独立：旧私有名并集 **9 个**（「对照物 ∪ Shinku 旧实现」，`kit.py namegap` 核对
+   覆盖完整、0 缺口 0 多出）在新文件里**零命中**（精确标识符 token 比对）；
+4. 散文独立：docstring + 注释、连续 ≥12 字符逐字片段 **0 处**；
+5. **行为等价性对拍 `_c2_4_parity.py`：154 次比对、0 处差异**。两侧各挂真 `TestClient`、
+   打相同请求比对 status/body/`cache-control`/配置模块变更/注册表字节；探测回调由双方各自
+   注入假件，不替换传输层（本批碰 `store`／`engine` 注入面，不碰 `requests`）；
+6. **变异测试：注入 59 个典型缺陷，全部被抓住、0 漏**，恢复后逐文件 sha256 与初始值一致。
+
+**全量回归：937 passed / 0 failed / 2,235 subtests**（C2-3 基线 865，本批 +72）。
+`src/shinku` 由 40 个 .py / 236,926 B → **41 个 .py / 252,566 B**。
+
+**本批暴露的一个覆盖盲区（写进 §5 验收缺陷，供后续批次警惕）：** `set_active` 变异在
+**单供应商**场景下被 `load_registry` 的兜底（`active not in providers` 时回退
+`next(iter(providers))`）**掩盖**——变异把 `set_active=False` 写下的空 `activeProviderId`
+被兜底填回唯一供应商，断言永远通过。必须用**两供应商对照**（先激活 glm，再用
+`activate=True` 保存 deepseek，断言切到 `deepseek`）才能暴露。这是变异覆盖的真实盲区，
+不是测试缺口，已用一条两供应商测试钉住。
+
+**依赖变更：无。** `model_services.py` 只用 FastAPI `APIRouter`／`Request`／`TestClient`
+（测试侧）、标准库与注入的 `store`／`engine`／`config_module` 面，未引入任何新依赖；
+`declared_dependencies` 与 C2-3 基线一致（10 项）。
+
+**本批未做的事：** 未装配——`build_model_services_router` 当前**未注册进 `api/app.py`**
+（属 C4/C6 装配工作）；未碰 `provider_probe.py` 与 `llm_runtime.py`（C2-5）。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -471,10 +532,11 @@ C2-4 = `routes/model_services`、C2-5 = `provider_probe` + `llm_runtime`。
   C1-5（§4.2.6）是 C1 对账清单的**收口批**，不改变上列四个子批次的登记。
 - **C2 起按依赖图切批**（2026-09-18；2026-09-19 依依赖图重排）：C2-1 已完成（§4.2.5）、
   **C2-2 已完成**（§4.2.7，`llm_client` 传输层——`model_service` 模块级依赖它，
-  anthropic 分支返回整个 `AnthropicCompatClient`，切片≈整份文件，故先行）。
-  下一步 **C2-3 = `model_service` + `model_service_config`**（一对，必须同批；
-  前者 23,836 B 上游真实现、后者是项目侧适配层），随后 C2-4 = `routes/model_services`
-  （对照物取 Akane 侧 8,014 B，上游本无路由层）、C2-5 = `provider_probe` + `llm_runtime`。
+  anthropic 分支返回整个 `AnthropicCompatClient`，切片≈整份文件，故先行）、
+  **C2-3 已完成**（§4.2.8，`model_service` + `model_service_config` 一对同批）、
+  **C2-4 已完成**（§4.2.9，`routes/model_services`，上游无路由层、对照物取 Akane 侧
+  8,014 B 仅作接线核对）。下一步 **C2-5 = `provider_probe` + `llm_runtime`**
+  （77,579 B 巨石、84 方法，需单独定切批方案）。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
