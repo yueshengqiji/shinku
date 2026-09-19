@@ -50,6 +50,7 @@ class OutgoingSegment:
 class OutgoingMessage:
     conversation_id: str
     segments: tuple[OutgoingSegment, ...]
+    conversation_type: str = "unknown"
     reply_to_message_id: str = ""
 
     def __post_init__(self) -> None:
@@ -57,10 +58,13 @@ class OutgoingMessage:
             raise ValueError("conversation_id is required")
         if not self.segments:
             raise ValueError("outgoing message needs at least one segment")
+        if str(self.conversation_type or "unknown").strip().lower() not in {"private", "group", "guild", "unknown"}:
+            raise ValueError("unsupported conversation type")
 
     def as_dict(self) -> dict[str, Any]:
         result = {
             "conversation_id": self.conversation_id,
+            "conversation_type": self.conversation_type,
             "segments": [segment.as_dict() for segment in self.segments],
         }
         if self.reply_to_message_id:
@@ -93,6 +97,7 @@ def build_reply(
     text: str = "",
     *,
     attachments: Sequence[Mapping[str, Any]] = (),
+    conversation_type: str = "unknown",
     reply_to_message_id: str = "",
 ) -> OutgoingMessage:
     """把一轮回复构造成一个不可拆分的出站消息。"""
@@ -118,6 +123,7 @@ def build_reply(
     return OutgoingMessage(
         conversation_id=str(conversation_id or "").strip(),
         segments=tuple(segments),
+        conversation_type=str(conversation_type or "unknown").strip().lower(),
         reply_to_message_id=str(reply_to_message_id or "").strip(),
     )
 
