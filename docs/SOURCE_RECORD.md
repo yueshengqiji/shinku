@@ -751,6 +751,26 @@ AgentLoop 的 `invalid_decision` 分支，不生成口头假工具调用。
 本批不新增依赖，旧项目源码没有被修改。真实供应商请求和真实工具宿主仍需下一批
 灰度接线后再测，当前结果不冒充线上 Agent 灰测。
 
+#### 4.2.18 C3-6 工具注册边界与 Agent 联合回归 —— 洁净室重写
+
+C3-6 增加 `ToolRegistry`，把真实宿主接入收敛成 handler 注册、只读暴露和 native
+schema 生成三件事；随后用假 runtime 串通注册表、planner、AgentLoop、单轮执行和
+结果回灌，验证完整的离线 Agent 主线。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/tools/registry.py` | 2026-09-19 | **洁净室重写** | C3-3 `ToolHandler` 与 C1-4 native schema 公开面 | 契约 `docs/contracts/c3_6_tool_host_joint_regression.md`；按注册表/只读视图组织，不引入宿主线程和供应商配置 |
+| `tests/test_contract_c3_6.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖注册约束、只读视图、schema 白名单和 planner→loop→handler 联合回归 |
+| `docs/contracts/c3_6_tool_host_joint_regression.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录宿主接入与联合回归范围 |
+
+**联合回归结果：** handler 注册后生成 native schema；假 runtime 第 1 轮要求搜索，
+工具结果回灌，第 2 轮输出最终答复。没有真实供应商请求、QQ、浏览器或后台进程，
+所以本批证明的是独立代码主线连通，不是线上服务已经切换。
+
+**验收证据：** C3-6 专项测试 **4 passed / 0 failed**；全量回归为
+**1074 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。
+本批无新增依赖，旧项目源码没有被修改。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -769,7 +789,8 @@ AgentLoop 的 `invalid_decision` 分支，不生成口头假工具调用。
   任务快照/事件边界与执行器输入输出，不接 QQ 路由）；C3-2 已完成任务快照/事件
   服务边界（§4.2.14），C3-3 已完成单轮工具执行与错误封装（§4.2.15），C3-4 已
   完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
-  planner 适配（§4.2.17），下一批进入真实工具宿主接线和 Agent 灰度回归。
+  planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），下一批
+  进入真实工具宿主接线和 Agent 灰度回归。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
