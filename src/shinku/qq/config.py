@@ -19,6 +19,10 @@ class NapCatConnectionConfig:
     access_token: str = ""
     access_token_file: str = ""
     timeout: float = 10.0
+    webhook_enabled: bool = False
+    webhook_path: str = "/events/napcat"
+    event_token: str = ""
+    image_roots: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "NapCatConnectionConfig":
@@ -28,11 +32,17 @@ class NapCatConnectionConfig:
             timeout = float(raw_timeout)
         except ValueError:
             timeout = 10.0
+        raw_roots = str(env.get("SHINKU_NAPCAT_IMAGE_ROOTS", "") or "")
         return cls(
             base_url=str(env.get("SHINKU_NAPCAT_BASE_URL", "") or "").strip(),
             access_token=str(env.get("SHINKU_NAPCAT_ACCESS_TOKEN", "") or "").strip(),
             access_token_file=str(env.get("SHINKU_NAPCAT_ACCESS_TOKEN_FILE", "") or "").strip(),
             timeout=timeout,
+            webhook_enabled=str(env.get("SHINKU_NAPCAT_WEBHOOK_ENABLED", "") or "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            webhook_path=str(env.get("SHINKU_NAPCAT_WEBHOOK_PATH", "/events/napcat") or "/events/napcat").strip(),
+            event_token=str(env.get("SHINKU_NAPCAT_EVENT_TOKEN", "") or "").strip(),
+            image_roots=tuple(item.strip() for item in raw_roots.split(",") if item.strip()),
         )
 
     def token_value(self) -> str:
@@ -64,6 +74,8 @@ class NapCatConnectionConfig:
                 errors.append("base_url_userinfo_forbidden")
         if self.timeout <= 0:
             errors.append("timeout_invalid")
+        if self.webhook_enabled and not self.webhook_path.startswith("/"):
+            errors.append("webhook_path_invalid")
         return tuple(errors)
 
     def diagnostics(self) -> dict[str, object]:
@@ -80,7 +92,11 @@ class NapCatConnectionConfig:
             "configured": bool(self.base_url.strip()),
             "valid": not self.validate(),
             "errors": list(self.validate()),
+            "webhook_enabled": self.webhook_enabled,
+            "webhook_path": self.webhook_path,
             "endpoint": endpoint,
             "token_present": bool(self.access_token or self.access_token_file),
+            "event_token_present": bool(self.event_token),
+            "image_root_count": len(self.image_roots),
             "timeout": self.timeout,
         }

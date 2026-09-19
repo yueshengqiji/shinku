@@ -22,6 +22,9 @@ from typing import Sequence
 from . import __version__
 from . import names
 from .config import ensure_directories, load_settings
+from .qq.config import NapCatConnectionConfig
+from .qq.host import NapCatHost
+from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
 
 IMPLEMENTED_SERVICES = ("backend",)
 
@@ -53,6 +56,19 @@ def _cmd_doctor() -> int:
     print()
     print(f"correlation header : {names.CORRELATION_ID_HEADER}")
     print(f"service token hdr  : {names.SERVICE_TOKEN_HEADER}")
+    napcat = NapCatConnectionConfig.from_env()
+    napcat_diag = napcat.diagnostics()
+    print()
+    print(
+        "napcat webhook    : "
+        f"{'enabled' if napcat_diag['webhook_enabled'] else 'disabled'} "
+        f"path={napcat_diag['webhook_path']} endpoint={napcat_diag['endpoint'] or '(unset)'}"
+    )
+    print(
+        "napcat credentials : "
+        f"action_token={'set' if napcat_diag['token_present'] else 'unset'} "
+        f"event_token={'set' if napcat_diag['event_token_present'] else 'unset'}"
+    )
     print()
     if created:
         print("created:")
@@ -86,7 +102,26 @@ def _cmd_serve(service: str) -> int:
 
     from .api import create_app
 
-    app = create_app(settings)
+    napcat_config = NapCatConnectionConfig.from_env()
+    napcat_host = None
+    if napcat_config.webhook_enabled:
+        errors = napcat_config.validate()
+        if errors:
+            print("invalid enabled NapCat configuration: " + ",".join(errors), file=sys.stderr)
+            return 2
+        napcat_host = NapCatHost.from_config(
+            napcat_config,
+            visual_bridge=NapCatVisualInputBridge(
+                materialize=NapCatImageMaterializer(allowed_roots=napcat_config.image_roots)
+            ),
+        )
+
+    app = create_app(
+        settings,
+        napcat_host=napcat_host,
+        napcat_webhook_path=napcat_config.webhook_path,
+        napcat_event_token=napcat_config.event_token,
+    )
     uvicorn.run(
         app,
         host=settings.binds[service],

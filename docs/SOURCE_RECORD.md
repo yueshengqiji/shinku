@@ -1074,6 +1074,24 @@ C4-13 为 `create_app()` 增加可选 `napcat_host` 注入点：默认不暴露 
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有启动真实后端端口或连接 NapCat。
 
+#### 4.2.36 C4-14 NapCat 启动器接线 —— 洁净室重写
+
+C4-14 将 `SHINKU_NAPCAT_*` 配置接入 `shinku serve --service backend`：开关关闭时不
+创建宿主；开启但配置无效时拒绝启动；开启且配置有效时装配 `NapCatHost`、受控图片
+materializer 和 webhook 路由。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/cli.py` | 2026-09-19 | **洁净室重写** | C4-11 配置；C4-13 挂载 | 契约 `docs/contracts/c4_14_napcat_launcher.md`；启动开关和失败闭环 |
+| `src/shinku/qq/config.py` | 2026-09-19 | **洁净室重写** | C4-11 配置 | 增加 webhook、事件 token 和图片根目录配置 |
+| `.env.example` | 2026-09-19 | `INDEPENDENT_KEEP` | 配置说明 | 增加开关、路径、事件 token 和图片根目录示例 |
+| `tests/test_contract_c4_14.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖 doctor、拒绝启动和挂载成功 |
+| `docs/contracts/c4_14_napcat_launcher.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录启动器接线边界 |
+
+**验收证据：** C4-14 专项测试 **3 passed / 0 failed**；全量回归为 **1146 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有启动真实后端端口或连接 NapCat。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1102,7 +1120,8 @@ C4-13 为 `create_app()` 增加可选 `napcat_host` 注入点：默认不暴露 
   C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
   （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
-  （§4.2.35），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
+  （§4.2.35），C4-14 已完成启动器接线（§4.2.36），下一步进入真实 QQ 适配器联调
+  和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
