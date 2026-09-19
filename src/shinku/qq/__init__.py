@@ -5,7 +5,7 @@ from .attention import AttentionBatch, AttentionBatcher, AttentionDecision, Atte
 from .routing import ReplyRoutePolicy, RouteDecision
 from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, OutgoingSegment, build_reply, deliver
 from .adapter import QQIngressAdapter, QQIngressResult
-from .napcat import NapCatActionTransport, NapCatEventAdapter
+from .napcat import NapCatActionTransport, NapCatEventAdapter, NapCatHttpActionCaller
 
 __all__ = [
     "AttentionBatch",
@@ -18,6 +18,7 @@ __all__ = [
     "MessageSegment",
     "NapCatActionTransport",
     "NapCatEventAdapter",
+    "NapCatHttpActionCaller",
     "QQIngressAdapter",
     "QQIngressResult",
     "OutgoingMessage",
