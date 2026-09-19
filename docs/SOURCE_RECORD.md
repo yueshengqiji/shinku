@@ -405,6 +405,65 @@ C2-4 = `routes/model_services`、C2-5 = `provider_probe` + `llm_runtime`。
 `model_service` 属 C2-3），属「可被装配的传输件」；未碰 `tts_client.py`
 （Akane 侧也是壳，Shinku 旧侧 11,274 B 独立改写 sim=0.4754，排期属 C6 声音链路）。
 
+#### 4.2.8 C2-3 模型服务配置原语 + 真红侧供应商目录 —— 洁净室重写（两个模块同批）
+
+**为什么这两个必须同批：** Shinku 旧侧 `companion_v01/model_service_config.py` 第 19 行起
+整段 `from .model_service import (...)`——它是**上游原语的项目侧入口**（目录、别名、默认模型、
+应用策略留在项目，值对象、归一化、校验与注册表实现在上游）。两者是一对，拆批会让第二批的
+对照物变成「已有落点的模块」，判定口径跟着歪。落点命名按 C2-2 定的词汇：
+`providers/service.py`（与项目无关的原语）+ `providers/catalog.py`（项目侧目录与策略）。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/providers/service.py` | 2026-09-19 | **洁净室重写** | `code_shared/model_service.py`（上游真实现 23,836 B / 637 行） | 契约 `docs/contracts/c2_3_model_service.md`；表达层：Shinku 撰写（私有名整组另起：`_coalesce`／`_inherit`／`_write_registry`；公开面 `bool_value`／`bounded_int`／`safe_int`／`probe_metadata`／`public_provider_entry` 是契约事实，按原名迁移） |
+| `src/shinku/providers/catalog.py` | 2026-09-19 | **洁净室重写** | **上游无对应物**（规矩二十五）；行为基线取 Shinku 旧侧 `companion_v01/model_service_config.py` 14,198 B / 389 行 | 契约同上 §1.7；表达层：Shinku 撰写（私有名 `_as_provider_id`／`_vision_model_fits_provider`／`_sync_native_tool_policy`） |
+| `tests/test_contract_c2_3.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；探测与自检全程假传输层（`requests.get` 记录入参、`build_llm_client` 换假工厂），注册表读写落在临时目录 |
+| `docs/contracts/c2_3_model_service.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；§0 三项决定（对拍基线 / 键序 / 配置模块属性名）各配理由 |
+
+**对照物判定（本批是规矩二十五的两种形态，必须分开登记）：**
+
+| 模块 | 上游 `code_shared` | Akane 侧 | Shinku 旧侧 | 形态 |
+| --- | --- | --- | --- | --- |
+| `model_service.py` | **23,836 B / 637 行（对照物）** | 无此文件 | 19,104 B / 348 行 | 上游有真实现 |
+| `model_service_config.py` | **无此文件** | 4,062 B / 128 行（**接线核对用**） | 14,198 B / 389 行（**行为基线**） | 上游无对应物 |
+
+`model_service_config` 属**项目侧策略**，上游共享包里本来就没有它——Akane 侧那份（4,062 B）
+只有「哪些是共享契约、哪些是项目策略」这一个用途，**不拿来抄**，行为基线是 Shinku 旧侧
+那份 389 行（GLM 预置、别名、默认模型、视觉守卫、原生工具联动都在里面）。
+旧侧 `model_service.py`（348 行 vs 上游 637 行，调用形态是**上一代**：位置参数
+`normalize_api_protocol(str(...), base)`、`build_llm_client` 从 `services.llm_client` 导入）
+是比 C2-2 的 `services/llm_client.py` 更早期的一次改写，**仍只进 `LEGACY_NAMES` 并集**。
+
+**三项契约决定（契约 §0）：** ① 对拍基线——`catalog` 侧对**真红旧实现**而非 Akane 壳，
+因为 Akane 那份没有 GLM／别名／环境变量兜底／视觉守卫／原生工具联动；
+② `model_service_settings_payload` 的**键序跟上游**（pop 式 ⇒ `protocol` 键在最前），
+不跟旧侧（按字段顺序现搭 ⇒ `providerId` 在最前）——JSON 对象键序不是语义，
+但「跟哪一侧」必须钉住，故对拍里单开一组比 `list(payload.keys())`；
+③ 配置模块的属性名（`CHAT_*` / `VISION_*` / `ENABLE_NATIVE_TOOL_DECISION` 等）**按原名继承**，
+属契约事实，C4/C6 装配时复查。
+
+**六项证据：**
+
+1. 契约文档 `docs/contracts/c2_3_model_service.md`（10,455 B / 187 行：常量、值对象字段、
+   四个错误码、两条取值链的语义差别、函数签名与参数顺序、注册表文件格式、
+   目录视图 20 个键、真红侧策略，§0 三项决定各配理由）；
+2. 独立测试 `tests/test_contract_c2_3.py`（**167 个用例 / 17 个 TestCase 类 + 8 个假件类 /
+   23 个 subTest 调用点**，76,599 B / 1,536 行）；
+3. 实现独立：旧私有名并集 **9 个**（「对照物 ∪ Shinku 旧实现」，`kit.py namegap` 核对
+   覆盖完整、0 缺口 0 多出）在两个新文件里**零命中**（精确标识符 token 比对）；
+4. 散文独立：docstring + 注释、连续 ≥12 字符逐字片段 **0 处**；
+5. **行为等价性对拍 `_c2_3_parity.py`：812 次比对、0 处差异**。八组：设置归一化 452、
+   目录侧 112、校验 18、存取 50（含 7 组落盘内容，用 `json.loads` 比内容不比字节）、
+   探测与自检 14、目录条目 48、整页与应用 14、纯函数助手 104；
+6. **变异测试：注入 60 个典型缺陷，全部被抓住、0 漏**，恢复后 sha256 与初始值一致。
+
+**全量回归：865 passed / 0 failed / 2,170 subtests**（C2-2 基线 698，本批 +167）。
+`src/shinku` 由 38 个 .py / 193,258 B → **40 个 .py / 236,926 B**。
+
+**本批未做的事：** 未装配——`ModelServiceConfigStore` / `public_model_services_snapshot` /
+`apply_model_service_settings` 当前**无消费者**（`routes/model_services` 属 C2-4，
+`provider_probe` 与 `llm_runtime` 属 C2-5），属「可被装配的配置件」。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
