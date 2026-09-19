@@ -544,9 +544,9 @@ audit 审计与用量度量（C2-5c），`runtime.py` 用 mixin 合成公开
 
 | 路径 | 字节 / 行 | 说明 |
 | --- | --- | --- |
-| `src/shinku/llm/runtime_core.py` | 71,517 B / 1,825 行 | 传输骨架全量：bundle 构建/热切换、JSON/NDJSON/流式三通道、payload 组装、瞬时重试（`TransientLLMError`）与熔断记账、`StreamTap` 流式顶层 JSON 增量解析、JSON 修复/截断/兜底链、41 键度量与 last-error |
+| `src/shinku/llm/runtime_core.py` | 73,429 B / 1,826 行 | 传输骨架全量：bundle 构建/热切换、JSON/NDJSON/流式三通道、payload 组装、瞬时重试（`TransientLLMError`）与熔断记账、`StreamTap` 流式顶层 JSON 增量解析、JSON 修复/截断/兜底链、41 键度量与 last-error |
 | `src/shinku/llm/runtime.py` | 1,379 B / 44 行 | 组合根（MRO：capabilities → audit → core） |
-| `src/shinku/llm/runtime_capabilities.py` | 6,350 B / 145 行 | **桩**：空输入路径最小等价实现（C2-5b 替换） |
+| `src/shinku/llm/runtime_capabilities.py` | 6,495 B / 145 行 | **桩**：空输入路径最小等价实现（C2-5b 替换） |
 | `src/shinku/llm/runtime_audit.py` | 5,376 B / 150 行 | **桩**：同上（C2-5c 替换） |
 | `docs/contracts/c2_5_runtime.md` | 9,579 B / 141 行 | 公开面 / 契约事实 / SHINKU_ 环境变量映射 / 桩边界 |
 | `tests/test_contract_c2_5.py` | 46,574 B / 1,137 行 | 68 用例 + 51 subtest（含收尾覆盖类 `C2_5CoverageTests` 14 用例） |
