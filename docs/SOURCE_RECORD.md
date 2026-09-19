@@ -771,6 +771,27 @@ schema 生成三件事；随后用假 runtime 串通注册表、planner、AgentL
 **1074 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。
 本批无新增依赖，旧项目源码没有被修改。
 
+#### 4.2.19 C3-7 工具宿主接线与 Agent 灰度回归 —— 洁净室重写
+
+C3-7 增加独立的 `ToolHost` 适配层，把已注册的 handler、native schema、LLMPlanner
+和 AgentLoop 接到一个可注入的宿主边界。宿主健康状态、工具白名单和执行策略在这一层
+统一收口；白名单同时限制模型可见 schema 与实际可执行 handler，避免两侧边界不一致。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/hosts/tool_host.py` | 2026-09-19 | **洁净室重写** | C3-3 `ToolHandler`、C3-5 `LLMPlanner`、C3-6 `ToolRegistry` | 契约 `docs/contracts/c3_7_tool_host_gray.md`；只做宿主装配，不引入 QQ、浏览器、线程或供应商密钥 |
+| `tests/test_contract_c3_7.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖健康状态、planner→loop→handler 回灌、白名单隔离与策略阻断 |
+| `docs/contracts/c3_7_tool_host_gray.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录离线灰度口径和真实宿主的接入边界 |
+
+**灰度结果：** 使用假 runtime、独立 Agent 内核和注入式 handler，完成两轮“工具调用→
+结果回灌→最终答复”链路；白名单不会修改注册表，也不会让未授权 handler 被执行。没有
+真实供应商请求、QQ、浏览器或后台进程，所以本批证明的是宿主装配边界，不是线上 Agent
+服务已经接通。
+
+**验收证据：** C3-7 专项测试 **4 passed / 0 failed**；全量回归为 **1078 passed /
+0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
+没有被修改。下一步才是把真实工具宿主和实际供应商/端口做灰度联调。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -789,8 +810,9 @@ schema 生成三件事；随后用假 runtime 串通注册表、planner、AgentL
   任务快照/事件边界与执行器输入输出，不接 QQ 路由）；C3-2 已完成任务快照/事件
   服务边界（§4.2.14），C3-3 已完成单轮工具执行与错误封装（§4.2.15），C3-4 已
   完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
-  planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），下一批
-  进入真实工具宿主接线和 Agent 灰度回归。
+  planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），C3-7 已
+  完成独立工具宿主装配与离线灰度（§4.2.19），下一步进入真实宿主和实际供应商/端口
+  的联调灰度。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
