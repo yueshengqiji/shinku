@@ -834,6 +834,26 @@ C3-9 修复真实 runtime 输出形状与 planner 之间的断点：`LLMRuntime.
 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
 没有被修改。
 
+#### 4.2.22 C3-10 外部工具宿主桥接 —— 洁净室重写
+
+C3-10 增加 `ExternalToolBridge`，把 QQ、浏览器、MCP 或其他独立进程抽象成“工具描述
++ 注入式调用通道”。它复用既有 `ToolRegistry`、`ToolHost` 和 C3-3 执行边界，不把
+进程管理、网络地址、密钥或 cookie 引入 Agent 核心；外部宿主只需实现 `call()`。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/hosts/external.py` | 2026-09-19 | **洁净室重写** | C3-3 `ToolHandler`、C3-6 `ToolRegistry`、C3-7 `ToolHost` | 契约 `docs/contracts/c3_10_external_tool_bridge.md`；不引入具体传输协议或旧宿主实现 |
+| `tests/test_contract_c3_10.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖描述校验、健康信息与外部调用两轮回灌 |
+| `docs/contracts/c3_10_external_tool_bridge.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录外部宿主的最小职责和灰度口径 |
+
+**灰度结果：** 内存 transport 成功接收工具名、参数和上下文，并经 AgentLoop 回灌为
+最终答复；非法工具描述在注册前被拒绝。没有真实进程、QQ、浏览器、MCP 或网络请求，
+所以本批证明的是外部宿主接线契约，不是具体宿主已经可用。
+
+**验收证据：** C3-10 专项测试 **3 passed / 0 failed**；全量回归为 **1083 passed /
+0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
+没有被修改。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -854,8 +874,8 @@ C3-9 修复真实 runtime 输出形状与 planner 之间的断点：`LLMRuntime.
   完成离线计划-工具-结果循环与失败恢复（§4.2.16），C3-5 已完成 LLMRuntime
   planner 适配（§4.2.17），C3-6 已完成工具注册与离线联合回归（§4.2.18），C3-7 已
   完成独立工具宿主装配与离线灰度（§4.2.19），C3-8 已完成 runtime 能力闸门
-  （§4.2.20），C3-9 已完成真实 `LLMRuntime` 输出回灌回归（§4.2.21），下一步进入
-  真实宿主和实际供应商/端口的联调灰度。
+  （§4.2.20），C3-9 已完成真实 `LLMRuntime` 输出回灌回归（§4.2.21），C3-10 已完成
+  外部工具宿主桥接边界（§4.2.22），下一步进入真实宿主和实际供应商/端口的联调灰度。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
