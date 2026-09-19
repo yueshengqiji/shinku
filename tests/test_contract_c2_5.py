@@ -1106,11 +1106,11 @@ class C2_5BoundaryTests(unittest.TestCase):
         import ast as py_ast
 
         stdlib_imports = (
-            "json", "logging", "os", "re", "threading", "time", "hashlib",
+            "json", "logging", "os", "re", "threading", "time", "hashlib", "datetime",
         )
         stdlib_from = (
             "json", "logging", "os", "re", "threading", "time",
-            "dataclasses", "pathlib", "typing", "urllib", "hashlib",
+            "dataclasses", "pathlib", "typing", "urllib", "hashlib", "datetime",
             "__future__",
         )
         for path in SRC_FILES:

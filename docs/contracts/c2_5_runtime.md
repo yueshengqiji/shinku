@@ -31,7 +31,7 @@ Akane 侧 `companion_v01/llm_runtime.py` 是 `code_shared` 兼容转发壳（同
 | --- | --- | --- | --- |
 | C2-5a | `runtime_core.py` + `runtime.py` | 传输骨架：bundle 构建/热切换、三通道（JSON/NDJSON/流式）、payload 组装、瞬时重试与熔断记账、`StreamTap` 流式解析、JSON 修复/截断/兜底、度量计数与 last-error | 本批 |
 | C2-5b | `runtime_capabilities.py` | 原生工具（tools/tool_choice/tool_calls）、(host, model) 画像与 allowlist、thinking 控制、图片项 | **已完成** |
-| C2-5c | `runtime_audit.py` | prompt 审计、token/缓存用量度量（双口径）、缓存提示组装 | 桩→完整实现 |
+| C2-5c | `runtime_audit.py` | prompt 审计、token/缓存用量度量（双口径）、缓存提示组装 | **已完成** |
 
 组合根 `runtime.py`：`class LLMRuntime(RuntimeCapabilitiesMixin,
 RuntimeAuditMixin, RuntimeCore)`。三片通过 `self.<方法>` 互调（core 调
@@ -43,7 +43,7 @@ capabilities/audit 的桥接点在 `_build_payload` / `_run_json_call` /
 False`、`_maybe_record_audit(...) → no-op`）。即在「不启用原生工具、
 不开审计、不带缓存提示、非 DeepSeek」的路径上，C2-5a 的 LLMRuntime
 行为与旧实现一致；这些路径之外的行为由 C2-5b/C2-5c 替换桩体后补齐。
-对拍与变异在 C2-5a 只覆盖桩等价路径，C2-5c 收口后扩到全量。
+对拍与变异在 C2-5a 先覆盖桩等价路径；C2-5b/c 收口后已扩到能力与审计全量矩阵。
 
 ## 3. 公开契约面（后续批次 engine / memory_compaction_service 依赖）
 

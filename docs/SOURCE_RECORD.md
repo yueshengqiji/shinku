@@ -547,10 +547,11 @@ audit 审计与用量度量（C2-5c），`runtime.py` 用 mixin 合成公开
 | `src/shinku/llm/runtime_core.py` | 73,429 B / 1,826 行 | 传输骨架全量：bundle 构建/热切换、JSON/NDJSON/流式三通道、payload 组装、瞬时重试（`TransientLLMError`）与熔断记账、`StreamTap` 流式顶层 JSON 增量解析、JSON 修复/截断/兜底链、41 键度量与 last-error |
 | `src/shinku/llm/runtime.py` | 1,379 B / 44 行 | 组合根（MRO：capabilities → audit → core） |
 | `src/shinku/llm/runtime_capabilities.py` | 12,710 B / 307 行 | **C2-5b 完整实现**：工具形状、供应商画像/allowlist、tool_calls、thinking、图片与 JSON 能力 |
-| `src/shinku/llm/runtime_audit.py` | 5,376 B / 150 行 | **桩**：同上（C2-5c 替换） |
+| `src/shinku/llm/runtime_audit.py` | 12,245 B / 304 行 | **C2-5c 完整实现**：提示词审计、token/缓存双口径用量、缓存提示 |
 | `docs/contracts/c2_5_runtime.md` | 9,579 B / 141 行 | 公开面 / 契约事实 / SHINKU_ 环境变量映射 / 桩边界 |
 | `tests/test_contract_c2_5.py` | 46,574 B / 1,137 行 | 68 用例 + 51 subtest（含收尾覆盖类 `C2_5CoverageTests` 14 用例） |
 | `tests/test_contract_c2_5b.py` | 9,807 B / 246 行 | 14 用例：能力协商、图片、thinking、tool-call 与 payload 契约 |
+| `tests/test_contract_c2_5c.py` | 9,068 B / 201 行 | 13 用例：usage 别名、流式去重、审计落盘、缓存提示契约 |
 
 **桩边界（本批测试与对拍的范围声明）：** capabilities/audit 桩在「不带
 原生工具、不带用户图片、响应不带 usage、审计关、非 DeepSeek 思考控制、
@@ -614,8 +615,28 @@ host/model 画像与 `SHINKU_NATIVE_TOOL_PROVIDER_ALLOWLIST`、非流式/流式
 | 私有名与外来标识 | 新能力模块与旧私有函数名交集 0；外来标识 0 |
 | 散文重叠 | **0 处** |
 
-本批没有修改旧项目源码。C2-5a 的传输核心保持冻结；下一批只处理
-`runtime_audit.py` 的审计、token、缓存提示与用量口径（C2-5c）。
+本批没有修改旧项目源码。C2-5a 的传输核心保持冻结；C2-5b/c 后续分别替换能力
+与审计桩体，最终状态见 §4.2.11–§4.2.12。
+
+#### 4.2.12 C2-5c 审计、token 与缓存用量 —— 完整实现
+
+C2-5c 已替换 `runtime_audit.py` 桩体，完成以下观测面：usage 字段别名归一、
+chat/aux 双口径 token 统计、流式重复 usage 指纹去重、Anthropic/DeepSeek 两套
+缓存字段、提示词分段审计（只落盘摘要与大小，不落盘明文）、官方 OpenAI 缓存提示
+与强制开关、namespace/retention 归一化。审计默认关闭，aux 审计必须显式打开。
+
+**验收证据：**
+
+| 检查 | 结果 |
+| --- | --- |
+| C2-5c 专项测试 | **13 passed / 0 failed** |
+| 全量回归 | **1032 passed / 0 failed**，2286 个 subTest 通过，1 个既有 warning |
+| 行为对拍 | C2-5a/b/c 矩阵合并后 **405 比对 / 0 差异** |
+| 变异测试 | **12 注入 / 12 抓住 / 0 漏**，恢复校验 OK |
+| 私有名与外来标识 | 新审计模块与旧方法名交集 0，外来标识 0 |
+| 散文重叠 | **0 处** |
+
+旧项目源码仍为只读；`provider_probe` 按切批决定暂缓迁移。
 
 ## 5. 当前未决
 
@@ -629,9 +650,9 @@ host/model 画像与 `SHINKU_NATIVE_TOOL_PROVIDER_ALLOWLIST`、非流式/流式
   **C2-4 已完成**（§4.2.9，`routes/model_services`，上游无路由层、对照物取 Akane 侧
   8,014 B 仅作接线核对）。**C2-5 切批方案已定**（2026-09-19 使用者拍板）：`llm_runtime`
   拆 core/capabilities/audit 三文件三批，`provider_probe` 暂缓。
-  **C2-5a 已完成**（§4.2.10，传输核心 + 组合根），**C2-5b 已完成**（§4.2.11，
-  能力协商完整实现）。下一步 **C2-5c = audit 完整实现**（审计/token/缓存用量，
-  全量对拍收口）。
+  **C2-5a、C2-5b、C2-5c 均已完成**（§4.2.10–§4.2.12，LLM 运行时三簇全部收口）。
+  `provider_probe` 按决定暂缓迁移；C2-5 已通过全量对拍，下一主线进入 **C3 Agent
+  任务循环、工具注入与失败恢复**。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
