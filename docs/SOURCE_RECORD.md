@@ -887,6 +887,23 @@ C4-2 增加 `ReplyRoutePolicy` 与 `RouteDecision`，在模型调用前确定私
 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
 没有被修改，也没有连接 QQ 或 NapCat。
 
+#### 4.2.25 C4-3 注意力门与短窗口合并 —— 洁净室重写
+
+C4-3 增加不调用模型的 `AttentionPolicy` 与 `AttentionBatcher`：路由已确认的消息
+立即调度，主动回复受显式开关和概率控制，同一会话短窗口内的连续 @/直呼消息合并成
+一轮并保留优先级主消息。普通群消息不会因为“每来一条就问一次模型”而产生额外请求。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/attention.py` | 2026-09-19 | **洁净室重写** | C4-2 `RouteDecision` | 契约 `docs/contracts/c4_3_attention_batching.md`；概率、时钟和合并状态均可注入 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_3.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖主动开关、概率命中、同会话合并、超时和主次优先级 |
+| `docs/contracts/c4_3_attention_batching.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录注意力和批处理边界 |
+
+**验收证据：** C4-3 专项测试 **6 passed / 0 failed**；全量回归为 **1099 passed /
+0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
+没有被修改，也没有连接 QQ、NapCat 或模型。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -909,7 +926,8 @@ C4-2 增加 `ReplyRoutePolicy` 与 `RouteDecision`，在模型调用前确定私
   完成独立工具宿主装配与离线灰度（§4.2.19），C3-8 已完成 runtime 能力闸门
   （§4.2.20），C3-9 已完成真实 `LLMRuntime` 输出回灌回归（§4.2.21），C3-10 已完成
   外部工具宿主桥接边界（§4.2.22）。C4-1 已完成入站消息与附件边界（§4.2.23），C4-2
-  已完成确定性回复路由（§4.2.24），下一步进入主动回复/注意力策略和真实适配器联调。
+  已完成确定性回复路由（§4.2.24），C4-3 已完成注意力门与短窗口合并（§4.2.25），下一步
+  进入消息投递契约和真实适配器联调。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
