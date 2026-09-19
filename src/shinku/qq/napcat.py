@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import base64
+from dataclasses import dataclass
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -12,7 +14,15 @@ from urllib.request import Request, urlopen
 from .delivery import DeliveryTransport, OutgoingMessage
 from .message import IncomingMessage
 
-__all__ = ["NapCatActionTransport", "NapCatEventAdapter", "NapCatHttpActionCaller"]
+__all__ = [
+    "NapCatActionTransport",
+    "NapCatEventAdapter",
+    "NapCatEventDecoder",
+    "NapCatHttpActionCaller",
+    "NapCatVisualInput",
+    "NapCatVisualInputBridge",
+    "NapCatVisualBatch",
+]
 
 
 class NapCatEventAdapter:
@@ -24,6 +34,115 @@ class NapCatEventAdapter:
         if str(event.get("post_type") or "message").strip().lower() != "message":
             raise ValueError("napcat event is not a message event")
         return IncomingMessage.from_event(event)
+
+
+class NapCatEventDecoder:
+    """解码 NapCat webhook 的 JSON body，再交给事件适配器。"""
+
+    def __init__(self, adapter: NapCatEventAdapter | None = None) -> None:
+        self.adapter = adapter or NapCatEventAdapter()
+
+    def decode(self, payload: bytes | bytearray | str | Mapping[str, Any]) -> IncomingMessage:
+        if isinstance(payload, Mapping):
+            event = dict(payload)
+        else:
+            if isinstance(payload, (bytes, bytearray)):
+                try:
+                    payload = bytes(payload).decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("napcat event body must be UTF-8 JSON") from exc
+            try:
+                event = json.loads(str(payload))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("napcat event body must be valid JSON") from exc
+        if not isinstance(event, Mapping):
+            raise ValueError("napcat event JSON must be an object")
+        return self.adapter.normalize(event)
+
+
+@dataclass(frozen=True)
+class NapCatVisualInput:
+    """一张图片从 QQ 引用到模型输入之间的显式状态。"""
+
+    source_kind: str
+    reference: str
+    data_url: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.data_url.lower().startswith("data:image/")
+
+    def as_model_item(self) -> dict[str, Any] | None:
+        if not self.ready:
+            return None
+        return {"data_url": self.data_url}
+
+
+@dataclass(frozen=True)
+class NapCatVisualBatch:
+    """图片输入准备结果；未解析的图片不会被伪装成“没有图片”。"""
+
+    inputs: tuple[NapCatVisualInput, ...]
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.inputs) and all(item.ready for item in self.inputs)
+
+    @property
+    def pending(self) -> bool:
+        return any(not item.ready for item in self.inputs)
+
+    def model_images(self) -> list[dict[str, Any]]:
+        return [item for item in (entry.as_model_item() for entry in self.inputs) if item is not None]
+
+
+class NapCatVisualInputBridge:
+    """把 NapCat 图片引用转换成 runtime 可消费的 data URL。
+
+    ``materialize`` 是唯一的下载/读文件边界。没有注入它时，远程 URL、本地路径和
+    media id 会保持为 pending，不会被折叠成 ``[图片]``，也不会触发隐式网络或文件读取。
+    """
+
+    def __init__(self, materialize: Callable[[Mapping[str, Any]], Any] | None = None) -> None:
+        self.materialize = materialize
+
+    def build(self, message: IncomingMessage) -> NapCatVisualBatch:
+        inputs: list[NapCatVisualInput] = []
+        for attachment in message.attachments:
+            if str(attachment.get("kind") or "").strip().lower() != "image":
+                continue
+            reference = next(
+                (
+                    str(attachment.get(key) or "").strip()
+                    for key in ("url", "local_path", "media_id")
+                    if str(attachment.get(key) or "").strip()
+                ),
+                "",
+            )
+            source_kind = next(
+                (key for key in ("url", "local_path", "media_id") if str(attachment.get(key) or "").strip()),
+                "unknown",
+            )
+            data_url = reference if reference.lower().startswith("data:image/") else ""
+            if not data_url and self.materialize is not None:
+                data_url = self._coerce_data_url(self.materialize(dict(attachment)), attachment)
+            inputs.append(NapCatVisualInput(source_kind, reference, data_url))
+        return NapCatVisualBatch(tuple(inputs))
+
+    @staticmethod
+    def _coerce_data_url(value: Any, attachment: Mapping[str, Any]) -> str:
+        if isinstance(value, Mapping):
+            value = value.get("data_url") or value.get("dataUrl") or value.get("content")
+        if isinstance(value, str):
+            candidate = value.strip()
+            return candidate if candidate.lower().startswith("data:image/") else ""
+        if not isinstance(value, (bytes, bytearray)):
+            return ""
+        mime = str(attachment.get("mime_type") or attachment.get("mime") or "image/png").strip()
+        if not mime.lower().startswith("image/"):
+            mime = "image/png"
+        encoded = base64.b64encode(bytes(value)).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
 
 
 class NapCatActionTransport(DeliveryTransport):

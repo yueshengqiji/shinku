@@ -972,6 +972,23 @@ C4-7 增加 `NapCatHttpActionCaller`，把 OneBot HTTP POST、Bearer token、超
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有连接真实 NapCat、QQ 账号或端口。
 
+#### 4.2.30 C4-8 NapCat 事件解码与图片视觉引用桥 —— 洁净室重写
+
+C4-8 增加 `NapCatEventDecoder` 与 `NapCatVisualInputBridge`：前者解码 webhook JSON，
+后者保留图片引用并显式区分 pending / model-ready。图片下载或本地读取只能通过注入的
+`materialize` 发生，避免原始图片段丢失后被误认为纯文本消息。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/napcat.py` | 2026-09-19 | **洁净室重写** | C4-1 入站附件；C4-6 OneBot 事件 | 契约 `docs/contracts/c4_8_event_visual_bridge.md`；事件体与视觉输入状态独立建模 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_8.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖解码、pending、materialize、多图顺序和错误边界 |
+| `docs/contracts/c4_8_event_visual_bridge.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录图片闭环边界 |
+
+**验收证据：** C4-8 专项测试 **5 passed / 0 failed**；全量回归为 **1124 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有连接真实 NapCat、QQ 账号、网络或本地图片。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -997,7 +1014,8 @@ C4-7 增加 `NapCatHttpActionCaller`，把 OneBot HTTP POST、Bearer token、超
   已完成确定性回复路由（§4.2.24），C4-3 已完成注意力门与短窗口合并（§4.2.25），C4-4
   已完成消息投递边界（§4.2.26），C4-5 已完成 QQ 入站适配器组合边界（§4.2.27），C4-6
   已完成 OneBot/NapCat payload 适配（§4.2.28），C4-7 已完成 HTTP action caller（§4.2.29），
-  下一步进入真实 QQ 适配器联调和图片附件闭环。
+  C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），下一步进入真实 QQ 适配器联调和
+  注入式图片 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
