@@ -30,7 +30,7 @@ Akane 侧 `companion_v01/llm_runtime.py` 是 `code_shared` 兼容转发壳（同
 | 批次 | 落点 | 内容 | 状态 |
 | --- | --- | --- | --- |
 | C2-5a | `runtime_core.py` + `runtime.py` | 传输骨架：bundle 构建/热切换、三通道（JSON/NDJSON/流式）、payload 组装、瞬时重试与熔断记账、`StreamTap` 流式解析、JSON 修复/截断/兜底、度量计数与 last-error | 本批 |
-| C2-5b | `runtime_capabilities.py` | 原生工具（tools/tool_choice/tool_calls）、(host, model) 画像与 allowlist、thinking 控制、图片项 | 桩→完整实现 |
+| C2-5b | `runtime_capabilities.py` | 原生工具（tools/tool_choice/tool_calls）、(host, model) 画像与 allowlist、thinking 控制、图片项 | **已完成** |
 | C2-5c | `runtime_audit.py` | prompt 审计、token/缓存用量度量（双口径）、缓存提示组装 | 桩→完整实现 |
 
 组合根 `runtime.py`：`class LLMRuntime(RuntimeCapabilitiesMixin,

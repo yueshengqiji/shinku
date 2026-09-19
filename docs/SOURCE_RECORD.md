@@ -546,10 +546,11 @@ audit 审计与用量度量（C2-5c），`runtime.py` 用 mixin 合成公开
 | --- | --- | --- |
 | `src/shinku/llm/runtime_core.py` | 73,429 B / 1,826 行 | 传输骨架全量：bundle 构建/热切换、JSON/NDJSON/流式三通道、payload 组装、瞬时重试（`TransientLLMError`）与熔断记账、`StreamTap` 流式顶层 JSON 增量解析、JSON 修复/截断/兜底链、41 键度量与 last-error |
 | `src/shinku/llm/runtime.py` | 1,379 B / 44 行 | 组合根（MRO：capabilities → audit → core） |
-| `src/shinku/llm/runtime_capabilities.py` | 6,495 B / 145 行 | **桩**：空输入路径最小等价实现（C2-5b 替换） |
+| `src/shinku/llm/runtime_capabilities.py` | 12,710 B / 307 行 | **C2-5b 完整实现**：工具形状、供应商画像/allowlist、tool_calls、thinking、图片与 JSON 能力 |
 | `src/shinku/llm/runtime_audit.py` | 5,376 B / 150 行 | **桩**：同上（C2-5c 替换） |
 | `docs/contracts/c2_5_runtime.md` | 9,579 B / 141 行 | 公开面 / 契约事实 / SHINKU_ 环境变量映射 / 桩边界 |
 | `tests/test_contract_c2_5.py` | 46,574 B / 1,137 行 | 68 用例 + 51 subtest（含收尾覆盖类 `C2_5CoverageTests` 14 用例） |
+| `tests/test_contract_c2_5b.py` | 9,807 B / 246 行 | 14 用例：能力协商、图片、thinking、tool-call 与 payload 契约 |
 
 **桩边界（本批测试与对拍的范围声明）：** capabilities/audit 桩在「不带
 原生工具、不带用户图片、响应不带 usage、审计关、非 DeepSeek 思考控制、
@@ -595,6 +596,27 @@ notes）按事实逐字保留。**起草中自查出两处旧名漏网**（`_end
 流式尝试上限（2+rescue）、JSON hint 槽位与契约文案、协议能力边界——
 复跑 **75/75**。
 
+#### 4.2.11 C2-5b 模型能力协商 —— 完整实现
+
+C2-5b 已在 C2-5a 的组合根上替换 `runtime_capabilities.py` 桩体，旧项目源码
+仍为只读行为基线。实现范围包括：工具 schema 规范化与上限、`tool_choice` 白名单、
+host/model 画像与 `SHINKU_NATIVE_TOOL_PROVIDER_ALLOWLIST`、非流式/流式
+`tool_calls` 归一化、DeepSeek thinking 控制、data-image 输入和
+`response_format=json_object` / JSON 关键字提示。
+
+**验收证据：**
+
+| 检查 | 结果 |
+| --- | --- |
+| C2-5b 专项测试 | **14 passed / 0 failed**（全量回归由 1005 增至 **1019 passed / 0 failed**） |
+| 能力行为对拍 | 与旧侧能力矩阵合并后 **384 比对 / 0 差异** |
+| 变异测试 | **13 注入 / 13 抓住 / 0 漏**，恢复校验 OK |
+| 私有名与外来标识 | 新能力模块与旧私有函数名交集 0；外来标识 0 |
+| 散文重叠 | **0 处** |
+
+本批没有修改旧项目源码。C2-5a 的传输核心保持冻结；下一批只处理
+`runtime_audit.py` 的审计、token、缓存提示与用量口径（C2-5c）。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -607,9 +629,9 @@ notes）按事实逐字保留。**起草中自查出两处旧名漏网**（`_end
   **C2-4 已完成**（§4.2.9，`routes/model_services`，上游无路由层、对照物取 Akane 侧
   8,014 B 仅作接线核对）。**C2-5 切批方案已定**（2026-09-19 使用者拍板）：`llm_runtime`
   拆 core/capabilities/audit 三文件三批，`provider_probe` 暂缓。
-  **C2-5a 已完成**（§4.2.10，传输核心 + 两桩文件 + 组合根）。
-  下一步 **C2-5b = capabilities 完整实现**（原生工具/画像/allowlist/thinking/图片），
-  随后 C2-5c = audit 完整实现（审计/token/缓存用量，全量对拍收口）。
+  **C2-5a 已完成**（§4.2.10，传输核心 + 组合根），**C2-5b 已完成**（§4.2.11，
+  能力协商完整实现）。下一步 **C2-5c = audit 完整实现**（审计/token/缓存用量，
+  全量对拍收口）。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
