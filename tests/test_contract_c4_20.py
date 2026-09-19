@@ -9,6 +9,13 @@ from unittest import mock
 from shinku import names
 from shinku.cli import main
 from shinku.persona import PersonaLoadError, load_persona
+from shinku.qq.agent_bridge import QQAgentBridge
+from shinku.qq.attention import AttentionBatcher
+from shinku.qq.host import NapCatHost
+from shinku.qq.napcat import NapCatVisualInputBridge
+from shinku.qq.adapter import QQIngressAdapter
+from shinku.qq.routing import ReplyRoutePolicy
+from shinku.qq.turns import NapCatTurnDispatcher
 from shinku.qq.assembly import (
     QQAgentConfig,
     QQAgentConfigError,
@@ -101,6 +108,55 @@ class QQAgentAssemblyTests(unittest.TestCase):
             host = app.state.napcat_host
             self.assertIsNotNone(host.turn_dispatcher)
             self.assertIsNone(host.turn_dispatcher.handler.sender)
+
+    def test_local_gray_path_merges_ingress_preserves_image_and_returns_one_dry_run_reply(self) -> None:
+        class Runtime:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def call_chat_json(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"speech": "看到了，先把这两句合在一起处理。"}
+
+        runtime = Runtime()
+        bridge = QQAgentBridge(runtime=runtime, system_prompt="独立主人设")
+        replies = []
+        ingress = QQIngressAdapter(
+            route_policy=ReplyRoutePolicy(bot_ids=frozenset({"bot-1"})),
+            batcher=AttentionBatcher(window_seconds=2.0),
+        )
+        host = NapCatHost(
+            ingress=ingress,
+            visual_bridge=NapCatVisualInputBridge(),
+            clock=lambda: 1.0,
+        )
+        dispatcher = NapCatTurnDispatcher(
+            handler=lambda turn: replies.append(bridge.handle_turn(turn)),
+            flush_batch=host.flush,
+            timer_factory=lambda delay, callback: mock.Mock(),
+        )
+        host.set_turn_dispatcher(dispatcher)
+        event = {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": "g-20",
+            "user_id": "u-20",
+            "message": [
+                {"type": "at", "data": {"qq": "bot-1"}},
+                {"type": "text", "data": {"text": "先看这张"}},
+                {"type": "image", "data": {"url": "data:image/png;base64,aGVsbG8="}},
+            ],
+        }
+        host.handle_event({**event, "message_id": "m-1"}, at=1.0)
+        host.handle_event({**event, "message_id": "m-2", "message": [{"type": "at", "data": {"qq": "bot-1"}}, {"type": "text", "data": {"text": "再补一句"}}]}, at=1.5)
+        receipt = dispatcher.flush()
+
+        self.assertEqual((receipt.dispatched, len(replies)), (1, 1))
+        self.assertEqual((replies[0].delivery_status, replies[0].sent), ("dry_run", False))
+        self.assertIn("两句", replies[0].final_text)
+        self.assertEqual(runtime.calls[0]["user_images"], [{"data_url": "data:image/png;base64,aGVsbG8="}])
+        self.assertIn("先看这张", runtime.calls[0]["history_turns"][0]["content"])
+        self.assertIn("再补一句", runtime.calls[0]["history_turns"][1]["content"])
 
 
 if __name__ == "__main__":

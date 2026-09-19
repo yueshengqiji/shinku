@@ -1203,6 +1203,21 @@ failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 
 本批没有读取旧项目 persona、没有使用真实密钥、没有重启 NapCat，也没有开启真实 QQ
 出站。
 
+#### 4.2.43 C4-21 QQ 入站到 Agent dry-run 本地灰测 —— 组合验收
+
+C4-21 用离线 fake runtime 验证 C4-18～C4-20 的真实组合路径：两条同会话、同短窗口
+且明确寻址的消息合并为一轮；第一条携带的 data URL 图片仍以 `user_images` 进入模型；
+最终文本构造成 dry-run 回复，不调用真实 sender。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `tests/test_contract_c4_20.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C4-18～C4-20 | 本仓库新建；覆盖入站到 Agent 的组合链 |
+| `docs/contracts/c4_21_local_gray_path.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录本地灰测边界 |
+
+**验收证据：** C4-21 组合专项 **1 passed / 0 failed**；全量回归 **1161 passed / 0
+failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 diff check 通过。
+没有监听端口、读取密钥或重启 NapCat。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
