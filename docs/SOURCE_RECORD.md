@@ -1043,6 +1043,22 @@ C4-11 增加 `NapCatConnectionConfig`：从独立的 `SHINKU_NAPCAT_*` 环境变
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有连接真实 NapCat、QQ 账号或端口。
 
+#### 4.2.34 C4-12 NapCat 入站 webhook 路由 —— 洁净室重写
+
+C4-12 增加 `create_napcat_webhook_router()`：将 `NapCatHost` 接入 FastAPI POST 路由，
+支持可选 Bearer 校验，并以摘要响应确认调度和图片状态；不在路由层自动发送回复。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/webhook.py` | 2026-09-19 | **洁净室重写** | C4-10 宿主组合 | 契约 `docs/contracts/c4_12_napcat_webhook.md`；独立 FastAPI 入站路由 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_12.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖 JSON、Bearer、错误和路径校验 |
+| `docs/contracts/c4_12_napcat_webhook.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录 HTTP 入站边界 |
+
+**验收证据：** C4-12 专项测试 **4 passed / 0 failed**；全量回归为 **1141 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有启动真实监听端口或连接 NapCat。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1070,7 +1086,8 @@ C4-11 增加 `NapCatConnectionConfig`：从独立的 `SHINKU_NAPCAT_*` 环境变
   已完成 OneBot/NapCat payload 适配（§4.2.28），C4-7 已完成 HTTP action caller（§4.2.29），
   C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
   （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
-  预检（§4.2.33），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
+  预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），下一步进入真实 QQ
+  适配器联调和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~

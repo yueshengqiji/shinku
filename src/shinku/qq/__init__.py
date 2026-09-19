@@ -7,6 +7,7 @@ from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, Outgoi
 from .adapter import QQIngressAdapter, QQIngressResult
 from .host import NapCatHost, NapCatHostResult
 from .config import NapCatConnectionConfig
+from .webhook import create_napcat_webhook_router
 from .napcat import (
     NapCatActionTransport,
     NapCatEventAdapter,
@@ -40,6 +41,7 @@ __all__ = [
     "NapCatHost",
     "NapCatHostResult",
     "NapCatConnectionConfig",
+    "create_napcat_webhook_router",
     "OutgoingMessage",
     "OutgoingSegment",
     "ReplyRoutePolicy",
