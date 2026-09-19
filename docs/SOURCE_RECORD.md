@@ -638,6 +638,29 @@ chat/aux 双口径 token 统计、流式重复 usage 指纹去重、Anthropic/De
 
 旧项目源码仍为只读；`provider_probe` 按切批决定暂缓迁移。
 
+#### 4.2.13 C3-1 Agent 任务协议层 —— 洁净室重写
+
+C3-1 先切出 Agent 执行器之前的无状态边界：任务工作流状态、步骤/事件状态、
+迁移校验，以及步骤、产物和文本列表的 payload 归一化与合并。这样后续工具编排
+可以只消费稳定的结构，不需要把数据库、QQ 路由或旧工作区实现一起搬进新仓。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/tasks/status.py` | 2026-09-19 | **洁净室重写** | 旧侧 `task_state.py` 的状态词汇、别名和迁移语义 | 契约 `docs/contracts/c3_1_task_protocol.md`；按任务域重新命名公开面与内部组织，未保留旧平铺文件名 |
+| `src/shinku/tasks/payloads.py` | 2026-09-19 | **洁净室重写** | 旧侧 `task_payloads.py` 的输入边界和合并语义 | 契约同上；新实现按 payload 边界重组，函数只做纯归一化，不接存储 |
+| `tests/test_contract_c3_1.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖状态别名、迁移拒绝、显式 reopen/cleanup、步骤 ID、字段截断、产物去重与合并 |
+| `docs/contracts/c3_1_task_protocol.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录本批边界与后续执行器的接入约束 |
+
+**对照物判定：** 上游共享包没有等价任务协议模块；Akane 侧只作为旧命名和接线
+核对，不作为实现来源。行为基线取 Shinku 旧侧对应模块的公开函数结果。新仓库
+没有向旧项目反向写入任何代码。
+
+**验收证据：** C3-1 专项测试 **9 passed / 0 failed**；全量回归由 1032 增至
+**1041 passed / 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。
+状态、payload、步骤和产物的边界对拍 **2446 次 / 0 差异**；新模块仅依赖标准库，
+不增加 `pyproject.toml` 依赖。C3-1 只完成协议层，Agent 循环、工具执行和失败
+恢复仍在后续 C3 批次。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -652,7 +675,8 @@ chat/aux 双口径 token 统计、流式重复 usage 指纹去重、Anthropic/De
   拆 core/capabilities/audit 三文件三批，`provider_probe` 暂缓。
   **C2-5a、C2-5b、C2-5c 均已完成**（§4.2.10–§4.2.12，LLM 运行时三簇全部收口）。
   `provider_probe` 按决定暂缓迁移；C2-5 已通过全量对拍，下一主线进入 **C3 Agent
-  任务循环、工具注入与失败恢复**。
+  任务循环、工具注入与失败恢复**；C3-1 已完成任务协议层（§4.2.13），下一批进入
+  任务快照/事件边界与执行器输入输出，不接 QQ 路由）。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
