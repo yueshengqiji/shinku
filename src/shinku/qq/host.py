@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .adapter import QQIngressAdapter, QQIngressResult
+from .config import NapCatConnectionConfig
 from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, deliver
 from .napcat import (
     NapCatActionTransport,
@@ -89,6 +90,40 @@ class NapCatHost:
             transport=NapCatActionTransport(caller),
             clock=clock,
         )
+
+    @classmethod
+    def from_config(
+        cls,
+        config: NapCatConnectionConfig,
+        *,
+        opener: Callable[..., Any] | None = None,
+        visual_bridge: NapCatVisualInputBridge | None = None,
+        ingress: QQIngressAdapter | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> "NapCatHost":
+        errors = config.validate()
+        if errors:
+            raise ValueError("invalid NapCat configuration: " + ",".join(errors))
+        caller = NapCatHttpActionCaller(
+            config.base_url,
+            access_token=config.token_value(),
+            timeout=config.timeout,
+            opener=opener,
+        )
+        return cls(
+            ingress=ingress,
+            visual_bridge=visual_bridge,
+            transport=NapCatActionTransport(caller),
+            clock=clock,
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        environ: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> "NapCatHost":
+        return cls.from_config(NapCatConnectionConfig.from_env(environ), **kwargs)
 
     def handle_event(self, payload: Any, *, at: float | None = None) -> NapCatHostResult:
         message = self.decoder.decode(payload)

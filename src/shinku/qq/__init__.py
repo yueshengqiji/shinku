@@ -6,6 +6,7 @@ from .routing import ReplyRoutePolicy, RouteDecision
 from .delivery import DeliveryResult, DeliveryTransport, OutgoingMessage, OutgoingSegment, build_reply, deliver
 from .adapter import QQIngressAdapter, QQIngressResult
 from .host import NapCatHost, NapCatHostResult
+from .config import NapCatConnectionConfig
 from .napcat import (
     NapCatActionTransport,
     NapCatEventAdapter,
@@ -38,6 +39,7 @@ __all__ = [
     "QQIngressResult",
     "NapCatHost",
     "NapCatHostResult",
+    "NapCatConnectionConfig",
     "OutgoingMessage",
     "OutgoingSegment",
     "ReplyRoutePolicy",

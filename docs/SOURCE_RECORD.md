@@ -1024,6 +1024,25 @@ C4-10 增加 `NapCatHost`：将事件解码、QQ 入站路由/注意力、视觉
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有启动真实 NapCat、QQ 账号或监听端口。
 
+#### 4.2.33 C4-11 NapCat 配置与安全预检 —— 洁净室重写
+
+C4-11 增加 `NapCatConnectionConfig`：从独立的 `SHINKU_NAPCAT_*` 环境变量读取 HTTP
+地址、token 和超时，提供 token 脱敏的 `diagnostics()`，并由 `NapCatHost.from_config()`
+在发送前完成配置校验。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/config.py` | 2026-09-19 | **洁净室重写** | C4-7 HTTP caller；C4-10 宿主 | 契约 `docs/contracts/c4_11_napcat_config_preflight.md`；独立环境变量与安全快照 |
+| `src/shinku/qq/host.py` | 2026-09-19 | **洁净室重写** | C4-10 宿主组合 | 增加 `from_config`/`from_env`，无效配置提前拒绝 |
+| `.env.example` | 2026-09-19 | `INDEPENDENT_KEEP` | 配置说明 | 仅增加 Shinku NapCat 配置键，不包含密钥 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_11.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖配置、脱敏、拒绝和延迟联网 |
+| `docs/contracts/c4_11_napcat_config_preflight.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录配置与预检边界 |
+
+**验收证据：** C4-11 专项测试 **4 passed / 0 failed**；全量回归为 **1137 passed /
+0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
+源码没有被修改，也没有连接真实 NapCat、QQ 账号或端口。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1050,8 +1069,8 @@ C4-10 增加 `NapCatHost`：将事件解码、QQ 入站路由/注意力、视觉
   已完成消息投递边界（§4.2.26），C4-5 已完成 QQ 入站适配器组合边界（§4.2.27），C4-6
   已完成 OneBot/NapCat payload 适配（§4.2.28），C4-7 已完成 HTTP action caller（§4.2.29），
   C4-8 已完成事件解码与图片视觉引用桥（§4.2.30），C4-9 已完成图片 materializer
-  （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），下一步进入真实 QQ 适配器
-  联调和注入式 materializer 接线。
+  （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
+  预检（§4.2.33），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
