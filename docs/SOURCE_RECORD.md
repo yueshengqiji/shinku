@@ -904,6 +904,23 @@ C4-3 增加不调用模型的 `AttentionPolicy` 与 `AttentionBatcher`：路由�
 0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
 没有被修改，也没有连接 QQ、NapCat 或模型。
 
+#### 4.2.26 C4-4 出站消息与附件投递边界 —— 洁净室重写
+
+C4-4 增加统一出站对象：文本、图片/文件附件和引用消息在一条 `OutgoingMessage` 中
+交给外部 transport，不再拆成“先文字、后图片”的两次发送。`DeliveryResult` 区分
+成功、适配器拒绝、传输异常和 transport 无效；失败不会生成模型 fallback 文本。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/delivery.py` | 2026-09-19 | **洁净室重写** | C4-1 附件边界；C4 外部投递事实 | 契约 `docs/contracts/c4_4_delivery_boundary.md`；不引入 QQ/NapCat 客户端 |
+| `src/shinku/qq/__init__.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 扩展本仓消息域导出面 |
+| `tests/test_contract_c4_4.py` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；覆盖文本+图片同请求、引用、空回复、拒绝和传输失败 |
+| `docs/contracts/c4_4_delivery_boundary.md` | 2026-09-19 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录出站投递边界 |
+
+**验收证据：** C4-4 专项测试 **6 passed / 0 failed**；全量回归为 **1105 passed /
+0 failed**，2286 个既有 subTest 保持通过，1 个既有 warning。本批无新增依赖，旧项目源码
+没有被修改，也没有连接 QQ 或 NapCat。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -926,8 +943,8 @@ C4-3 增加不调用模型的 `AttentionPolicy` 与 `AttentionBatcher`：路由�
   完成独立工具宿主装配与离线灰度（§4.2.19），C3-8 已完成 runtime 能力闸门
   （§4.2.20），C3-9 已完成真实 `LLMRuntime` 输出回灌回归（§4.2.21），C3-10 已完成
   外部工具宿主桥接边界（§4.2.22）。C4-1 已完成入站消息与附件边界（§4.2.23），C4-2
-  已完成确定性回复路由（§4.2.24），C4-3 已完成注意力门与短窗口合并（§4.2.25），下一步
-  进入消息投递契约和真实适配器联调。
+  已完成确定性回复路由（§4.2.24），C4-3 已完成注意力门与短窗口合并（§4.2.25），C4-4
+  已完成消息投递边界（§4.2.26），下一步进入真实 QQ 适配器联调和图片附件闭环。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
