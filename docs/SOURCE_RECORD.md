@@ -1110,6 +1110,21 @@ C4-15 增加 `load_project_env()`，让 CLI 读取 `SHINKU_ENV_FILE` 或当前�
 0 failed**，2286 个 subTest 保持通过，1 个既有 warning。本批无新增第三方依赖，旧项目
 源码没有被修改，也没有启动真实后端或连接 NapCat。
 
+#### 4.2.38 C4-16 真实 NapCat 灰度联调记录
+
+C4-16 在不覆盖旧项目 `9998`、不改写 NapCat forward webhook 配置的前提下，使用备用端口
+`19998` 启动独立后端，实际调用现有 NapCat 的 `get_login_info`，并向独立 webhook 发送
+合成 OneBot 入站事件。文本事件得到 `scheduled=true`；带 `data:image/*` 的图片 segment
+得到 `visual_ready=true`，证明新仓库的 HTTP action、webhook、消息边界和视觉桥已经能够
+在真实本机 NapCat 环境中接起来。完整边界和未覆盖项见 `docs/contracts/c4_16_real_napcat_gray.md`。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `docs/contracts/c4_16_real_napcat_gray.md` | 2026-09-19 | `INDEPENDENT_KEEP` | C4-7、C4-12、C4-13、C4-14、C4-15 | 本仓库真实本机灰度记录；不把旧服务切换误记为完成 |
+
+**验收证据：** 真实本机灰度通过；独立临时进程已正常停止；旧 `9998` 未修改；全量回归
+`1149 passed / 0 failed`，2286 个 subTest 保持通过，1 个既有 warning；工作区 clean。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1139,7 +1154,9 @@ C4-15 增加 `load_project_env()`，让 CLI 读取 `SHINKU_ENV_FILE` 或当前�
   （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
   （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
-  （§4.2.37），下一步进入真实 QQ 适配器联调和注入式 materializer 接线。
+  （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38）。下一步是用户确认后的真实
+  NapCat forward webhook 切换，以及 Agent/LLM 处理和受控出站回归；本次灰度没有修改现有
+  `9998` 服务，也没有声称这两项已经完成。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
