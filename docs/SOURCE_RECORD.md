@@ -1122,8 +1122,24 @@ C4-16 在不覆盖旧项目 `9998`、不改写 NapCat forward webhook 配置的�
 | --- | --- | --- | --- | --- |
 | `docs/contracts/c4_16_real_napcat_gray.md` | 2026-09-19 | `INDEPENDENT_KEEP` | C4-7、C4-12、C4-13、C4-14、C4-15 | 本仓库真实本机灰度记录；不把旧服务切换误记为完成 |
 
-**验收证据：** 真实本机灰度通过；独立临时进程已正常停止；旧 `9998` 未修改；全量回归
+**验收证据：** 真实本机灰度通过；独立版临时进程已正常停止；旧 `9998` 未修改；全量回归
 `1149 passed / 0 failed`，2286 个 subTest 保持通过，1 个既有 warning；工作区 clean。
+
+#### 4.2.39 C4-17 NapCat 并行 forward 灰度准备
+
+C4-17 在现有 NapCat OneBot 配置中保留旧 `akane-event`，追加独立版
+`shinku-standalone-gray` 指向 `http://127.0.0.1:19998/events/napcat`，并在写入前生成
+可恢复备份。独立版已启动并通过 `/health/ready`，但 NapCat 当前进程尚未 reload/restart，
+所以第二个 forward 仍处于“已准备、未热加载”状态。由于独立版的 Agent/LLM 出站处理器
+尚未装配，本批不强制重启 NapCat，也不允许真实消息进入未完成的回复链。
+
+| 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
+| --- | --- | --- | --- | --- |
+| `docs/contracts/c4_17_parallel_forward_stage.md` | 2026-09-19 | `INDEPENDENT_KEEP` | C4-16 | 本仓库并行灰度准备与回滚边界 |
+
+**验收证据：** 旧 `9998` ready（database/LLM/vector store/QQ 全部正常）；独立 `19998`
+ready；NapCat `get_status` 正常；配置 JSON 可解析；原配置备份已生成。下一步先补齐
+Agent/LLM 处理器，再由用户确认后 reload/restart NapCat。
 
 ## 5. 当前未决
 
@@ -1154,9 +1170,9 @@ C4-16 在不覆盖旧项目 `9998`、不改写 NapCat forward webhook 配置的�
   （§4.2.31），C4-10 已完成 NapCat 宿主组合层（§4.2.32），C4-11 已完成配置与安全
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
   （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
-  （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38）。下一步是用户确认后的真实
-  NapCat forward webhook 切换，以及 Agent/LLM 处理和受控出站回归；本次灰度没有修改现有
-  `9998` 服务，也没有声称这两项已经完成。
+  （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38），C4-17 已完成并行 forward
+  灰度准备（§4.2.39）。下一步是先装配独立版 Agent/LLM 处理器，再由用户确认后 reload/
+  restart NapCat，最后做受控出站回归；现阶段没有让独立版发送 QQ 消息。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
