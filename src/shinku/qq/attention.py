@@ -7,6 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from shinku.runtime_limits import RuntimeLimits
+
 from .message import IncomingMessage
 from .routing import RouteDecision
 
@@ -90,8 +92,13 @@ class AttentionBatch:
 class AttentionBatcher:
     """把同一会话短时间内的已调度消息合并成一轮。"""
 
-    def __init__(self, *, window_seconds: float = 1.5) -> None:
-        self.window_seconds = max(0.0, float(window_seconds))
+    def __init__(self, *, window_seconds: float | None = None) -> None:
+        configured = (
+            RuntimeLimits.from_environment().qq_batch_window_seconds
+            if window_seconds is None
+            else window_seconds
+        )
+        self.window_seconds = max(0.0, float(configured))
         self._conversation_id = ""
         self._messages: list[IncomingMessage] = []
         self._decisions: list[AttentionDecision] = []

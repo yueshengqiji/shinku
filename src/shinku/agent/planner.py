@@ -26,7 +26,10 @@ UserImagesBuilder = Callable[[AgentState], list[dict[str, Any]]]
 
 
 def _default_user_prompt(state: AgentState) -> str:
-    lines = ["根据当前任务继续处理。只做一件事：给出最终答复、等待用户，或选择一个工具。"]
+    lines = [
+        "根据当前任务继续处理。只做一件事：给出最终答复、等待用户，或选择一个工具。",
+        "工具是否必要由任务意图和上下文决定，不要因为某个关键词出现就强行调用。",
+    ]
     for item in state.transcript[-12:]:
         if not isinstance(item, Mapping):
             continue
@@ -52,16 +55,32 @@ class LLMPlanner:
         prompt_cache_key: str = "",
         native_tool_choice: Any = "auto",
         fallback_text: str = "暂时无法完成这一步。",
+        history_limit: int = 12,
     ) -> None:
         self.runtime = runtime
         self.system_prompt = str(system_prompt or "").strip()
         self.tool_specs = [dict(item) for item in (tool_specs or []) if isinstance(item, Mapping)]
-        self.build_user_prompt = build_user_prompt or _default_user_prompt
         self.build_user_images = build_user_images
         self.temperature = temperature
         self.prompt_cache_key = str(prompt_cache_key or "")
         self.native_tool_choice = native_tool_choice
         self.fallback_text = str(fallback_text or "").strip()
+        self.history_limit = max(1, min(100, int(history_limit or 12)))
+        self.build_user_prompt = build_user_prompt or self._default_user_prompt
+
+    def _default_user_prompt(self, state: AgentState) -> str:
+        lines = [
+            "根据当前任务继续处理。只做一件事：给出最终答复、等待用户，或选择一个工具。",
+            "工具是否必要由任务意图和上下文决定，不要因为某个关键词出现就强行调用。",
+        ]
+        for item in state.transcript[-self.history_limit:]:
+            if not isinstance(item, Mapping):
+                continue
+            role = str(item.get("role") or "unknown").strip()
+            content = str(item.get("content") or "").strip()
+            if content:
+                lines.append(f"{role}: {content}")
+        return "\n".join(lines)
 
     def __call__(self, *, state: AgentState) -> AgentDecision | None:
         user_images = self.build_user_images(state) if self.build_user_images is not None else None
@@ -80,11 +99,10 @@ class LLMPlanner:
         )
         return self._parse(response)
 
-    @staticmethod
-    def _history(state: AgentState) -> list[dict[str, str]]:
+    def _history(self, state: AgentState) -> list[dict[str, str]]:
         return [
             {"role": str(item.get("role") or "user"), "content": str(item.get("content") or "")}
-            for item in state.transcript[-12:]
+            for item in state.transcript[-self.history_limit:]
             if isinstance(item, Mapping) and str(item.get("content") or "").strip()
         ]
 
@@ -97,6 +115,11 @@ class LLMPlanner:
             return direct
         native_payload = response.get(NATIVE_TOOL_CALL_FIELD)
         if isinstance(native_payload, Mapping):
+            native_calls = native_payload.get("tool_calls")
+            if isinstance(native_calls, list):
+                decision = AgentDecision.from_value({"kind": "tool", "tool_calls": native_calls})
+                if decision is not None:
+                    return decision
             invocation = legacy_tool_call_to_invocation(native_payload)
             if invocation is not None:
                 return AgentDecision.tool(invocation)

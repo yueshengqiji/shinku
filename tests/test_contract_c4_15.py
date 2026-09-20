@@ -37,6 +37,17 @@ class ProjectEnvLoaderTests(unittest.TestCase):
         self.assertIsNone(load_project_env(environ, path="missing.env"))
         self.assertEqual(environ, {})
 
+    def test_empty_shell_value_does_not_mask_env_file_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_file = Path(temp_dir) / ".env"
+            env_file.write_text(
+                "SHINKU_CHAT_API_KEY=project-key\n",
+                encoding="utf-8",
+            )
+            environ = {"SHINKU_CHAT_API_KEY": ""}
+            load_project_env(environ, path=env_file)
+            self.assertEqual(environ["SHINKU_CHAT_API_KEY"], "project-key")
+
     def test_cli_doctor_reads_explicit_env_file_without_printing_token(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

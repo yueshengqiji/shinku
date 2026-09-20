@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from shinku.qq.attention import AttentionBatcher, AttentionPolicy
 from shinku.qq.message import IncomingMessage
@@ -42,6 +43,11 @@ class AttentionPolicyTests(unittest.TestCase):
 
 
 class AttentionBatcherTests(unittest.TestCase):
+    def test_default_window_can_be_overridden_by_environment(self) -> None:
+        with mock.patch.dict("os.environ", {"SHINKU_QQ_BATCH_WINDOW_SECONDS": "0.75"}):
+            batcher = AttentionBatcher()
+        self.assertEqual(batcher.window_seconds, 0.75)
+
     def test_same_conversation_messages_merge_and_keep_addressed_message_primary(self) -> None:
         policy = AttentionPolicy()
         router = ReplyRoutePolicy()

@@ -27,6 +27,15 @@ class ReplyRoutingTests(unittest.TestCase):
         ))
         self.assertEqual((decision.should_reply, decision.reason), (True, "mentioned_bot"))
 
+    def test_real_onebot_self_id_is_used_when_bot_ids_are_not_configured(self) -> None:
+        policy = ReplyRoutePolicy()
+        decision = policy.decide(_message(
+            {"type": "at", "data": {"qq": "3599477026"}},
+            {"type": "text", "data": {"text": "灰度测试"}},
+            self_id=3599477026,
+        ))
+        self.assertEqual((decision.should_reply, decision.reason), (True, "mentioned_bot"))
+
     def test_direct_name_requires_name_at_the_start(self) -> None:
         direct = self.policy.decide(_message({"type": "text", "data": {"text": "真红，过来一下"}}))
         incidental = self.policy.decide(_message({"type": "text", "data": {"text": "我刚才看见真红了"}}))
@@ -52,6 +61,19 @@ class ReplyRoutingTests(unittest.TestCase):
     def test_at_other_user_is_not_an_at_to_bot(self) -> None:
         decision = self.policy.decide(_message({"type": "at", "data": {"qq": "user-2"}}))
         self.assertFalse(decision.should_reply)
+
+    def test_route_names_and_switches_can_come_from_environment(self) -> None:
+        policy = ReplyRoutePolicy.from_environment(
+            {
+                "SHINKU_QQ_BOT_NAMES": "红,Shinku",
+                "SHINKU_QQ_ALLOW_GROUP_NAME_ADDRESS": "true",
+                "SHINKU_QQ_ALLOW_GROUP_AT": "false",
+            }
+        )
+        direct = policy.decide(_message({"type": "text", "data": {"text": "红，过来一下"}}))
+        at = policy.decide(_message({"type": "at", "data": {"qq": "bot-1"}}))
+        self.assertEqual(direct.reason, "direct_name")
+        self.assertEqual(at.reason, "unaddressed_group_message")
 
 
 if __name__ == "__main__":

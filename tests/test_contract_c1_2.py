@@ -21,6 +21,7 @@ import asyncio
 import re
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -503,6 +504,20 @@ class SessionsRouterShapeTests(unittest.TestCase):
 
 
 class SessionsListTests(unittest.TestCase):
+    def test_limits_can_be_overridden_without_changing_module_defaults(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "SHINKU_SESSION_LIST_LIMIT": "7",
+                "SHINKU_SESSION_MESSAGE_LIMIT": "33",
+            },
+        ):
+            client, store, *_ = _sessions_client()
+            client.get("/sessions")
+            client.post("/sessions/ensure", json={"session_id": "s-9"})
+        self.assertEqual(store.call("list_sessions")["limit"], 7)
+        self.assertEqual(store.call("get_session_messages")["limit"], 33)
+
     def test_it_returns_the_list_and_the_current_session(self) -> None:
         client, *_ = _sessions_client()
         response = client.get("/sessions", params={"session_id": "s-9"})

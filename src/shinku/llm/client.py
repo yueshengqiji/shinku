@@ -64,6 +64,8 @@ def build_llm_client(
     timeout: float = 60.0,
     max_retries: int = 0,
     protocol: str = "auto",
+    default_max_tokens: int = _DEFAULT_MAX_TOKENS,
+    system_cache_slots: int = _SYSTEM_CACHE_SLOTS,
 ):
     """按协议造客户端：显式协议优先，``auto`` 时按 ``base_url`` 猜，兜底 openai。
 
@@ -78,6 +80,8 @@ def build_llm_client(
             base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
+            default_max_tokens=default_max_tokens,
+            system_cache_slots=system_cache_slots,
         )
 
     client = OpenAI(
@@ -102,11 +106,22 @@ class AnthropicCompatClient:
     其余字段挂在实例上供外部读取，构造时就地归一化。
     """
 
-    def __init__(self, *, api_key: str, base_url: str, timeout: float = 60.0, max_retries: int = 0):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        timeout: float = 60.0,
+        max_retries: int = 0,
+        default_max_tokens: int = _DEFAULT_MAX_TOKENS,
+        system_cache_slots: int = _SYSTEM_CACHE_SLOTS,
+    ):
         self.api_key = str(api_key or "").strip()
         self.base_url = str(base_url or "").strip()
         self.timeout = float(timeout or 60.0)
         self.max_retries = int(max_retries or 0)
+        self.default_max_tokens = max(1, int(default_max_tokens or _DEFAULT_MAX_TOKENS))
+        self.system_cache_slots = max(0, int(system_cache_slots or 0))
         self.protocol = "anthropic"
         self.chat = _ChatSurface(self)
 
@@ -125,7 +140,12 @@ class _CompletionSurface:
         self._owner = owner
 
     def create(self, **options):
-        planned = _prepare_request(options, fallback_timeout=self._owner.timeout)
+        planned = _prepare_request(
+            options,
+            fallback_timeout=self._owner.timeout,
+            default_max_tokens=self._owner.default_max_tokens,
+            system_cache_slots=self._owner.system_cache_slots,
+        )
         reply = requests.post(
             _messages_endpoint(self._owner.base_url),
             headers=_request_headers(self._owner.api_key),
@@ -154,7 +174,13 @@ def _placeholder_key(protocol: str) -> str:
     return _KEY_PLACEHOLDERS.get(protocol, _KEY_FALLBACK)
 
 
-def _prepare_request(options: dict, *, fallback_timeout: float) -> _PreparedRequest:
+def _prepare_request(
+    options: dict,
+    *,
+    fallback_timeout: float,
+    default_max_tokens: int = _DEFAULT_MAX_TOKENS,
+    system_cache_slots: int = _SYSTEM_CACHE_SLOTS,
+) -> _PreparedRequest:
     """把 OpenAI 形状的调用参数改写成 Messages 请求体。"""
 
     system_text, messages = _split_roles(options.get("messages") or [])
@@ -165,10 +191,10 @@ def _prepare_request(options: dict, *, fallback_timeout: float) -> _PreparedRequ
         "max_tokens": int(
             options.get("max_tokens")
             or options.get("max_completion_tokens")
-            or _DEFAULT_MAX_TOKENS
+            or max(1, int(default_max_tokens or _DEFAULT_MAX_TOKENS))
         ),
     }
-    blocks = _system_block_list([system_text, *extras])
+    blocks = _system_block_list([system_text, *extras], cache_slots=system_cache_slots)
     if blocks:
         payload["system"] = blocks
 
@@ -210,11 +236,11 @@ def _clean_strings(values) -> list[str]:
     return [text for item in (values or []) if (text := str(item or "").strip())]
 
 
-def _system_block_list(parts: list) -> list[dict]:
-    """把系统提示词切成块；前 ``_SYSTEM_CACHE_SLOTS`` 块带缓存标记。"""
+def _system_block_list(parts: list, *, cache_slots: int = _SYSTEM_CACHE_SLOTS) -> list[dict]:
+    """把系统提示词切成块；前 ``cache_slots`` 块带缓存标记。"""
 
     blocks: list[dict] = []
-    slots = _SYSTEM_CACHE_SLOTS
+    slots = max(0, int(cache_slots or 0))
     for part in parts:
         text = str(part or "").strip()
         if not text:

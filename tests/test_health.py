@@ -53,6 +53,9 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(body["allow_lan"], False)
         self.assertEqual(body["version"], __version__)
         self.assertEqual(body["service"], "backend")
+        self.assertEqual(body["pid"], __import__("os").getpid())
+        self.assertIn("python", body)
+        self.assertIn("yt_dlp", body)
         self.assertEqual(Path(body["data_root"]), self.root / "data")
         self.assertEqual(Path(body["log_file"]), self.root / "logs" / "backend.log")
 

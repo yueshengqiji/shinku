@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import Mapping
 
 from shinku.agent.planner import ChatRuntime, PromptBuilder
+from shinku.agent.pending import JsonPendingApprovalStore
+from shinku.agent.loop import AGENT_MAX_ROUNDS_HARD_LIMIT
 from shinku.hosts.tool_host import ToolHost
 from shinku.llm.runtime import LLMRuntime
+from shinku.memory import LLMMemoryJudge, MemoryPolicy, MemoryRouter, MemoryService, MemoryStore
 from shinku.persona import PersonaDocument, load_persona
 from shinku.tools.execution import ExecutionPolicy
 
@@ -51,8 +54,15 @@ class QQAgentConfig:
     chat_model_name: str = ""
     metrics_path: str = ""
     max_rounds: int = 6
+    history_turns: int = 12
+    recent_context_messages: int = 8
+    approval_ttl_seconds: float = 300.0
+    approval_store_path: str = ""
     temperature: float = 0.7
     prompt_cache_key: str = "shinku:qq:v1"
+    memory_enabled: bool = True
+    memory_db_path: str = ""
+    memory_judge_enabled: bool = True
 
     def diagnostics(self) -> dict[str, object]:
         """返回安全配置快照，绝不返回 key 内容。"""
@@ -67,8 +77,15 @@ class QQAgentConfig:
             "chat_model_name": self.chat_model_name or "(unset)",
             "metrics_path": self.metrics_path or "(memory)",
             "max_rounds": self.max_rounds,
+            "history_turns": self.history_turns,
+            "recent_context_messages": self.recent_context_messages,
+            "approval_ttl_seconds": self.approval_ttl_seconds,
+            "approval_store_path": self.approval_store_path or "(memory)",
             "temperature": self.temperature,
             "prompt_cache_key": self.prompt_cache_key or "(unset)",
+            "memory_enabled": self.memory_enabled,
+            "memory_db_path": self.memory_db_path or "(default data root)",
+            "memory_judge_enabled": self.memory_judge_enabled,
         }
 
     def validation_errors(self) -> tuple[str, ...]:
@@ -86,8 +103,14 @@ class QQAgentConfig:
             errors.append("chat_api_protocol_invalid")
         if protocol not in {"ollama"} and not self.chat_api_key.strip():
             errors.append("chat_api_key_missing")
-        if not 1 <= self.max_rounds <= 12:
+        if not 1 <= self.max_rounds <= AGENT_MAX_ROUNDS_HARD_LIMIT:
             errors.append("max_rounds_invalid")
+        if not 1 <= self.history_turns <= 100:
+            errors.append("history_turns_invalid")
+        if not 1 <= self.recent_context_messages <= 50:
+            errors.append("recent_context_messages_invalid")
+        if not 30.0 <= self.approval_ttl_seconds <= 86400.0:
+            errors.append("approval_ttl_seconds_invalid")
         if not 0.0 <= self.temperature <= 1.0:
             errors.append("temperature_invalid")
         return tuple(errors)
@@ -107,6 +130,21 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         temperature = float(raw_temperature)
     except ValueError:
         temperature = 0.7
+    raw_history = str(env.get("SHINKU_QQ_AGENT_HISTORY_TURNS", "12") or "12").strip()
+    try:
+        history_turns = int(raw_history)
+    except ValueError:
+        history_turns = 12
+    raw_recent = str(env.get("SHINKU_QQ_AGENT_RECENT_CONTEXT_MESSAGES", "8") or "8").strip()
+    try:
+        recent_context_messages = int(raw_recent)
+    except ValueError:
+        recent_context_messages = 8
+    raw_ttl = str(env.get("SHINKU_QQ_AGENT_APPROVAL_TTL_SECONDS", "300") or "300").strip()
+    try:
+        approval_ttl_seconds = float(raw_ttl)
+    except ValueError:
+        approval_ttl_seconds = 300.0
     return QQAgentConfig(
         enabled=_flag(env.get("SHINKU_QQ_AGENT_ENABLED")),
         send_enabled=_flag(env.get("SHINKU_QQ_AGENT_SEND_ENABLED")),
@@ -117,8 +155,15 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         chat_model_name=str(env.get("SHINKU_CHAT_MODEL_NAME", "") or "").strip(),
         metrics_path=str(env.get("SHINKU_CHAT_METRICS_PATH", "") or "").strip(),
         max_rounds=max_rounds,
+        history_turns=history_turns,
+        recent_context_messages=recent_context_messages,
+        approval_ttl_seconds=approval_ttl_seconds,
+        approval_store_path=str(env.get("SHINKU_QQ_AGENT_APPROVAL_STORE_PATH", "") or "").strip(),
         temperature=temperature,
         prompt_cache_key=str(env.get("SHINKU_QQ_AGENT_PROMPT_CACHE_KEY", "shinku:qq:v1") or "shinku:qq:v1").strip(),
+        memory_enabled=_flag(env.get("SHINKU_MEMORY_ENABLED", "true"), default=True),
+        memory_db_path=str(env.get("SHINKU_MEMORY_DB_PATH", "") or "").strip(),
+        memory_judge_enabled=_flag(env.get("SHINKU_MEMORY_JUDGE_ENABLED", "true"), default=True),
     )
 
 
@@ -153,10 +198,30 @@ def assemble_qq_agent(
         raise QQAgentConfigError(",".join(errors))
     if not config.enabled:
         raise QQAgentConfigError("qq_agent_disabled")
+    effective_policy = policy if policy is not None else ExecutionPolicy.from_environment()
+    approval_store = JsonPendingApprovalStore(config.approval_store_path) if config.approval_store_path else None
     persona = load_persona(config.persona_file)
     if runtime is None:
         metrics = Path(config.metrics_path) if config.metrics_path else None
         runtime = LLMRuntime(metrics_path=metrics)
+    memory_service = None
+    if config.memory_enabled:
+        memory_policy = MemoryPolicy.from_environment()
+        db_path = Path(config.memory_db_path) if config.memory_db_path else Path("data") / "memory" / "shinku_memory.sqlite3"
+        judge = (
+            LLMMemoryJudge(runtime, recent_context_chars=memory_policy.recent_context_chars)
+            if config.memory_judge_enabled
+            else None
+        )
+        memory_service = MemoryService(
+            store=MemoryStore(db_path),
+            router=MemoryRouter(
+                judge=judge,
+                deterministic_guards=memory_policy.deterministic_guards,
+                max_query_chars=memory_policy.max_query_chars,
+            ),
+            policy=memory_policy,
+        )
     bridge = QQAgentBridge(
         runtime=runtime,
         system_prompt=persona.text,
@@ -165,8 +230,13 @@ def assemble_qq_agent(
         allowed_tool_names=allowed_tool_names,
         build_user_prompt=build_user_prompt,
         max_rounds=config.max_rounds,
-        policy=policy,
+        policy=effective_policy,
         prompt_cache_key=config.prompt_cache_key,
         temperature=config.temperature,
+        history_turns=config.history_turns,
+        recent_context_messages=config.recent_context_messages,
+        approval_ttl_seconds=config.approval_ttl_seconds,
+        approval_store=approval_store,
+        memory_service=memory_service,
     )
     return QQAgentAssembly(config=config, persona=persona, bridge=bridge)

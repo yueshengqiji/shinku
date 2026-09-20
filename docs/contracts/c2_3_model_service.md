@@ -131,6 +131,18 @@ public_provider_entry(*, preset, settings, metadata, active) -> dict
 `settings_from_mapping` · `canonical_provider_id` · `load` · `save` · `load_registry` ·
 `get_provider` · `save_provider` · `activate` · `save_model_probe`。
 
+### 1.7 可选自定义供应商目录
+
+内置 `PROVIDER_PRESETS` 仍是稳定的安全默认目录；部署者可以通过
+`SHINKU_PROVIDER_PRESETS_JSON` 追加公开目录元数据，而不修改源码。每项至少包含
+`id`、`protocol` 和兼容端点 `baseUrl`，可选 `label`、`description`、`apiKeyRequired`
+与 `capabilities`。仅接受 `openai`、`anthropic`、`ollama` 三种协议，供应商 id 使用
+小写字母、数字、`_`、`-`，且不能覆盖内置 id；非法项逐条忽略。这个 JSON 不接受密钥，
+密钥仍从注册表或现有通道配置读取。
+
+`SHINKU_PROVIDER_DEFAULT_MODELS_JSON` 可以为自定义 id 提供首次启动的默认模型名。
+目录加载不改变 `PROVIDER_PRESETS` 常量，因此没有配置时既有目录顺序、载荷和契约保持不变。
+
 ### 1.6 注册表文件格式
 
 ```json

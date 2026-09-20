@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import threading
 from typing import Any, Protocol, TYPE_CHECKING
 
+from shinku.runtime_limits import RuntimeLimits
+
 from .attention import AttentionBatch
 from .napcat import NapCatVisualInput
 
@@ -93,7 +95,7 @@ class NapCatTurnDispatcher:
         *,
         handler: Callable[[QQTurn], Any],
         flush_batch: Callable[[], AttentionBatch | None],
-        window_seconds: float = 1.5,
+        window_seconds: float | None = None,
         timer_factory: Callable[[float, Callable[[], None]], Any] | None = None,
     ) -> None:
         if not callable(handler):
@@ -102,7 +104,12 @@ class NapCatTurnDispatcher:
             raise TypeError("flush_batch must be callable")
         self.handler = handler
         self.flush_batch = flush_batch
-        self.window_seconds = max(0.0, float(window_seconds))
+        configured = (
+            RuntimeLimits.from_environment().qq_batch_window_seconds
+            if window_seconds is None
+            else window_seconds
+        )
+        self.window_seconds = max(0.0, float(configured))
         self._timer_factory = timer_factory or threading.Timer
         self._lock = threading.RLock()
         self._timer: Any = None

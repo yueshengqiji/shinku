@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from .invocation import (
@@ -43,14 +46,83 @@ class ExecutionPolicy:
     """一次执行允许/禁止的工具集合。
 
     空的 ``allowed`` 代表不额外限制；``blocked`` 永远优先于允许集合。
+
+    ``risk_by_tool`` 只影响是否需要宿主授权，不会绕过 ``allowed`` / ``blocked``
+    校验。未知工具默认按 ``default_risk`` 处理，默认是 ``medium``，因此新增工具
+    不会因为忘记登记风险级别而悄悄变成自动执行。
     """
 
     allowed: frozenset[str] = field(default_factory=frozenset)
     blocked: frozenset[str] = field(default_factory=frozenset)
+    risk_by_tool: Mapping[str, str] = field(default_factory=dict)
+    approval_required_by_risk: frozenset[str] = field(default_factory=lambda: frozenset({"medium", "high"}))
+    default_risk: str = "medium"
+
+    def __post_init__(self) -> None:
+        allowed = frozenset(str(item or "").strip() for item in self.allowed if str(item or "").strip())
+        blocked = frozenset(str(item or "").strip() for item in self.blocked if str(item or "").strip())
+        raw_risks = self.risk_by_tool if isinstance(self.risk_by_tool, Mapping) else {}
+        risks = {
+            str(name or "").strip(): self._normalize_risk(value, fallback="medium")
+            for name, value in raw_risks.items()
+            if str(name or "").strip()
+        }
+        required = frozenset(
+            self._normalize_risk(item, fallback="medium")
+            for item in self.approval_required_by_risk
+            if str(item or "").strip()
+        )
+        object.__setattr__(self, "allowed", allowed)
+        object.__setattr__(self, "blocked", blocked)
+        object.__setattr__(self, "risk_by_tool", MappingProxyType(risks))
+        object.__setattr__(self, "approval_required_by_risk", required)
+        object.__setattr__(self, "default_risk", self._normalize_risk(self.default_risk, fallback="medium"))
+
+    @staticmethod
+    def _normalize_risk(value: object, *, fallback: str = "medium") -> str:
+        risk = str(value or "").strip().lower()
+        return risk if risk in {"low", "medium", "high"} else fallback
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> "ExecutionPolicy":
+        """从独立项目环境读取风险策略；无效配置安全回退到默认值。"""
+
+        env = os.environ if environ is None else environ
+        default_risk = cls._normalize_risk(env.get("SHINKU_TOOL_DEFAULT_RISK", "medium"), fallback="medium")
+        raw_required = str(env.get("SHINKU_TOOL_APPROVAL_RISKS", "medium,high") or "medium,high")
+        required = frozenset(
+            cls._normalize_risk(item, fallback="")
+            for item in raw_required.split(",")
+            if cls._normalize_risk(item, fallback="")
+        ) or frozenset({"medium", "high"})
+        risks: dict[str, str] = {}
+        raw_overrides = str(env.get("SHINKU_TOOL_RISK_OVERRIDES_JSON", "") or "").strip()
+        if raw_overrides:
+            try:
+                decoded = json.loads(raw_overrides)
+            except (TypeError, ValueError):
+                decoded = {}
+            if isinstance(decoded, Mapping):
+                for name, value in decoded.items():
+                    tool_name = str(name or "").strip()
+                    if tool_name:
+                        risks[tool_name] = cls._normalize_risk(value, fallback=default_risk)
+        return cls(
+            risk_by_tool=risks,
+            approval_required_by_risk=required,
+            default_risk=default_risk,
+        )
 
     def accepts(self, tool_name: str) -> bool:
         name = str(tool_name or "").strip()
         return bool(name) and name not in self.blocked and (not self.allowed or name in self.allowed)
+
+    def risk_of(self, tool_name: str) -> str:
+        name = str(tool_name or "").strip()
+        return self.risk_by_tool.get(name, self.default_risk)
+
+    def requires_approval(self, tool_name: str) -> bool:
+        return self.risk_of(tool_name) in self.approval_required_by_risk
 
 
 def _handler_name(handler: Any, fallback: Any = "") -> str:

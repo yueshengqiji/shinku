@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from typing import Sequence
 
 from . import __version__
@@ -28,6 +29,7 @@ from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
 from .qq.assembly import QQAgentConfigError, assemble_qq_agent, load_qq_agent_config
 from .qq.turns import NapCatTurnDispatcher
 from .persona import PersonaLoadError, load_persona
+from .tools.execution import ExecutionPolicy
 
 IMPLEMENTED_SERVICES = ("backend",)
 
@@ -88,6 +90,13 @@ def _cmd_doctor() -> int:
         f"persona={persona_status} "
         f"model={agent_config.chat_model_name or '(unset)'}"
     )
+    tool_policy = ExecutionPolicy.from_environment()
+    print(
+        "tool policy       : "
+        f"default_risk={tool_policy.default_risk} "
+        f"approval_risks={','.join(sorted(tool_policy.approval_required_by_risk)) or '(none)'} "
+        f"overrides={len(tool_policy.risk_by_tool)}"
+    )
     if agent_config.enabled:
         errors = list(agent_config.validation_errors())
         if persona_status.startswith("invalid:"):
@@ -128,6 +137,11 @@ def _cmd_serve(service: str) -> int:
 
     napcat_config = NapCatConnectionConfig.from_env()
     agent_config = load_qq_agent_config()
+    if agent_config.memory_enabled and not agent_config.memory_db_path:
+        agent_config = replace(
+            agent_config,
+            memory_db_path=str(settings.data_root / "memory" / "shinku_memory.sqlite3"),
+        )
     if agent_config.enabled and not napcat_config.webhook_enabled:
         print(
             "invalid enabled QQ Agent configuration: napcat_webhook_required",

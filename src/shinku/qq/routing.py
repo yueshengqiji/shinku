@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +52,32 @@ class ReplyRoutePolicy:
     allow_reply_to_bot: bool = True
     allow_unaddressed_image: bool = False
 
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> "ReplyRoutePolicy":
+        """从独立配置生成路由策略；没有配置时保持默认行为。"""
+
+        env = os.environ if environ is None else environ
+        raw_ids = str(env.get("SHINKU_QQ_BOT_IDS", "") or "")
+        raw_names = str(env.get("SHINKU_QQ_BOT_NAMES", "") or "")
+        bot_ids = frozenset(item.strip() for item in raw_ids.split(",") if item.strip())
+        bot_names = tuple(item.strip() for item in raw_names.split(",") if item.strip())
+
+        def flag(key: str, default: bool) -> bool:
+            raw = str(env.get(key, "") or "").strip().lower()
+            if not raw:
+                return default
+            return raw in {"1", "true", "yes", "on"}
+
+        return cls(
+            bot_ids=bot_ids,
+            bot_names=bot_names or cls.bot_names,
+            allow_private=flag("SHINKU_QQ_ALLOW_PRIVATE", cls.allow_private),
+            allow_group_name_address=flag("SHINKU_QQ_ALLOW_GROUP_NAME_ADDRESS", cls.allow_group_name_address),
+            allow_group_at=flag("SHINKU_QQ_ALLOW_GROUP_AT", cls.allow_group_at),
+            allow_reply_to_bot=flag("SHINKU_QQ_ALLOW_REPLY_TO_BOT", cls.allow_reply_to_bot),
+            allow_unaddressed_image=flag("SHINKU_QQ_ALLOW_UNADDRESSED_IMAGE", cls.allow_unaddressed_image),
+        )
+
     def decide(self, message: IncomingMessage) -> RouteDecision:
         image_only = message.has_media and not message.text.strip()
         if message.conversation_type == "private" and self.allow_private:
@@ -82,13 +110,13 @@ class ReplyRoutePolicy:
     def _mentions_bot(self, message: IncomingMessage) -> bool:
         if bool(message.raw_event.get("mentioned_bot")) or bool(message.raw_event.get("at_bot")):
             return True
-        configured = {str(item).strip() for item in self.bot_ids if str(item).strip()}
+        configured = self._effective_bot_ids(message)
         return any(target in configured for segment in message.segments if segment.kind == "at" for target in _segment_targets(segment))
 
     def _reply_targets_bot(self, message: IncomingMessage) -> bool:
         if bool(message.raw_event.get("reply_to_bot")) or bool(message.raw_event.get("is_reply_to_bot")):
             return True
-        configured = {str(item).strip() for item in self.bot_ids if str(item).strip()}
+        configured = self._effective_bot_ids(message)
         if not configured:
             return False
         return any(
@@ -97,6 +125,24 @@ class ReplyRoutePolicy:
             if segment.kind == "reply"
             for target in _segment_targets(segment)
         )
+
+    def _effective_bot_ids(self, message: IncomingMessage) -> set[str]:
+        """Use explicit IDs first, then the OneBot event's ``self_id``.
+
+        NapCat's normal OneBot message payload identifies the logged-in bot as
+        ``self_id``; it does not add the test-only ``at_bot`` flag.  Without
+        this fallback a real ``[CQ:at,qq=...]`` segment is treated as an
+        ordinary group message whenever no bot ID was duplicated into Shinku's
+        environment.
+        """
+
+        configured = {str(item).strip() for item in self.bot_ids if str(item).strip()}
+        if configured:
+            return configured
+        self_id = message.raw_event.get("self_id")
+        if self_id is not None and str(self_id).strip():
+            configured.add(str(self_id).strip())
+        return configured
 
     @staticmethod
     def _reply_target_id(message: IncomingMessage) -> str:

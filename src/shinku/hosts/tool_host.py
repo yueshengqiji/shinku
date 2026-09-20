@@ -7,13 +7,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from shinku.agent.loop import AgentLoop, AgentRunResult
+from shinku.agent.loop import AgentLoop, AgentRunResult, ApprovalGate
 from shinku.agent.planner import ChatRuntime, LLMPlanner, PromptBuilder, UserImagesBuilder
 from shinku.tools.execution import ExecutionPolicy, ToolHandler
+from shinku.tools.invocation import ToolInvocation
 from shinku.tools.registry import ToolRegistry
 
 __all__ = ["ToolHost", "ToolHostHealth", "ToolHostRuntimeHealth"]
@@ -108,8 +109,10 @@ class ToolHost:
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
         completion_gate: Callable[[Any, str], bool] | None = None,
+        approval_gate: ApprovalGate | None = None,
         prompt_cache_key: str = "",
         temperature: float = 0.2,
+        history_limit: int = 12,
     ) -> AgentLoop:
         native_supported = self._native_tools_supported(runtime)
         tools_enabled = native_supported is not False
@@ -134,6 +137,7 @@ class ToolHost:
             build_user_images=build_user_images,
             prompt_cache_key=prompt_cache_key,
             temperature=temperature,
+            history_limit=history_limit,
         )
         return AgentLoop(
             planner=planner,
@@ -141,6 +145,7 @@ class ToolHost:
             max_rounds=max_rounds,
             policy=policy,
             completion_gate=completion_gate,
+            approval_gate=approval_gate,
         )
 
     @staticmethod
@@ -167,8 +172,12 @@ class ToolHost:
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
         completion_gate: Callable[[Any, str], bool] | None = None,
+        approval_gate: ApprovalGate | None = None,
+        approved_invocation: ToolInvocation | None = None,
+        approved_invocations: Sequence[ToolInvocation] | None = None,
         prompt_cache_key: str = "",
         temperature: float = 0.2,
+        history_limit: int = 12,
     ) -> AgentRunResult:
         loop = self.build_loop(
             runtime=runtime,
@@ -179,7 +188,15 @@ class ToolHost:
             max_rounds=max_rounds,
             policy=policy,
             completion_gate=completion_gate,
+            approval_gate=approval_gate,
             prompt_cache_key=prompt_cache_key,
             temperature=temperature,
+            history_limit=history_limit,
         )
-        return loop.run(task_id=task_id, context=context, initial_transcript=initial_transcript)
+        return loop.run(
+            task_id=task_id,
+            context=context,
+            initial_transcript=initial_transcript,
+            approved_invocation=approved_invocation,
+            approved_invocations=approved_invocations,
+        )

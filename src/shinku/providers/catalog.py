@@ -14,13 +14,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 from .config import (
     COMMON_PROVIDER_PRESETS,
     ProviderPreset,
+    SUPPORTED_PROTOCOLS,
     base_url_matches_provider,
     canonical_provider_id,
     infer_provider_id as shared_infer_provider_id,
@@ -44,6 +48,7 @@ from .service import (
 __all__ = [
     "MODEL_SERVICE_SCHEMA_VERSION",
     "PROVIDER_DEFAULT_MODELS",
+    "provider_default_models",
     "PROVIDER_ID_ALIASES",
     "PROVIDER_PRESETS",
     "PRESET_BY_ID",
@@ -81,6 +86,9 @@ PROVIDER_PRESETS: tuple[ModelProviderPreset, ...] = (
 )
 PRESET_BY_ID = preset_index(PROVIDER_PRESETS)
 
+_CUSTOM_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+_CUSTOM_CAPABILITIES = frozenset({"stream", "vision", "native_tools"})
+
 #: 选了某家但没填模型时的兜底模型。
 PROVIDER_DEFAULT_MODELS = {
     "glm": "glm-4.5-air",
@@ -89,6 +97,106 @@ PROVIDER_DEFAULT_MODELS = {
     "gemini": "gemini-2.5-flash",
     "anthropic": "claude-3-5-sonnet-latest",
 }
+
+
+def provider_default_models(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """返回可覆盖的供应商默认模型表。
+
+    内置表只负责首次启动的安全兜底；部署者可以通过
+    ``SHINKU_PROVIDER_DEFAULT_MODELS_JSON`` 覆盖或补充模型名，无需修改代码。
+    非法 JSON、非对象值和空模型名会被忽略，避免配置错误破坏整个供应商目录。
+    """
+
+    env = os.environ if environ is None else environ
+    result = dict(PROVIDER_DEFAULT_MODELS)
+    raw = str(env.get("SHINKU_PROVIDER_DEFAULT_MODELS_JSON", "") or "").strip()
+    if not raw:
+        return result
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return result
+    if not isinstance(decoded, Mapping):
+        return result
+    for provider_id, model_name in decoded.items():
+        provider = str(provider_id or "").strip().lower()
+        model = str(model_name or "").strip()
+        if provider and model:
+            result[provider] = model
+    return result
+
+
+def _configured_provider_presets(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[ModelProviderPreset, ...]:
+    """返回内置目录加上显式配置的自定义供应商。
+
+    自定义项只描述公开目录信息，不接受 API key；密钥仍由注册表或通道环境变量
+    提供。非法项逐条跳过，避免一条配置错误让整个控制中心起不来。
+    """
+
+    env = os.environ if environ is None else environ
+    base = tuple(PROVIDER_PRESETS)
+    known = {item.id for item in base}
+    raw = str(env.get("SHINKU_PROVIDER_PRESETS_JSON", "") or "").strip()
+    if not raw:
+        return base
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return base
+    if not isinstance(decoded, list):
+        return base
+
+    extras: list[ModelProviderPreset] = []
+    for item in decoded[:64]:
+        if not isinstance(item, Mapping):
+            continue
+        provider_id = str(item.get("id") or "").strip().lower()
+        protocol = str(item.get("protocol") or "openai").strip().lower()
+        base_url = str(item.get("baseUrl") or item.get("base_url") or "").strip().rstrip("/")
+        if (
+            not _CUSTOM_PROVIDER_ID_RE.fullmatch(provider_id)
+            or provider_id in known
+            or protocol not in SUPPORTED_PROTOCOLS
+            or (protocol != "ollama" and not base_url)
+        ):
+            continue
+        raw_capabilities = item.get("capabilities")
+        if isinstance(raw_capabilities, (list, tuple)):
+            capabilities = tuple(
+                value
+                for value in dict.fromkeys(
+                    str(value).strip().lower() for value in raw_capabilities
+                )
+                if value in _CUSTOM_CAPABILITIES
+            )
+        else:
+            capabilities = ("stream",)
+        if not capabilities:
+            capabilities = ("stream",)
+        label = str(item.get("label") or provider_id).strip()[:80]
+        description = str(item.get("description") or "自定义模型服务。").strip()[:240]
+        raw_key_required = item.get("apiKeyRequired", item.get("api_key_required", True))
+        if isinstance(raw_key_required, bool):
+            api_key_required = raw_key_required
+        else:
+            api_key_required = str(raw_key_required).strip().lower() not in {
+                "0", "false", "no", "off", "disabled"
+            }
+        extras.append(
+            ModelProviderPreset(
+                id=provider_id,
+                label=label or provider_id,
+                protocol=protocol,
+                base_url=base_url,
+                api_key_required=api_key_required,
+                description=description or "自定义模型服务。",
+                capabilities=capabilities,
+            )
+        )
+        known.add(provider_id)
+    return base + tuple(extras)
 
 #: 用户/前端可能写出的别名（含错别字与中文）。
 PROVIDER_ID_ALIASES = {
@@ -121,21 +229,24 @@ _VISION_MODEL_PREFIXES = {
 
 
 class ModelServiceConfigStore(_SettingsRegistry):
-    """本项目的注册表入口：目录、别名、默认模型都在这里定死。"""
+    """本项目的注册表入口：内置目录稳定，自定义目录可由环境追加。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, environ: Mapping[str, str] | None = None) -> None:
+        presets = _configured_provider_presets(environ)
         super().__init__(
             path,
-            presets=PROVIDER_PRESETS,
+            presets=presets,
             aliases=PROVIDER_ID_ALIASES,
-            default_models=PROVIDER_DEFAULT_MODELS,
+            default_models=provider_default_models(environ),
         )
 
 
 def provider_presets_payload() -> list[dict[str, Any]]:
-    """目录的载荷形态：通用预置那几项 + 一行「支持模型探测」标记。"""
+    """目录的载荷形态：内置预置 + 显式配置的自定义项。"""
 
-    payload = shared_presets_payload(PROVIDER_PRESETS, include_capabilities=True)
+    payload = shared_presets_payload(
+        _configured_provider_presets(), include_capabilities=True
+    )
     for item in payload:
         item["supportsModelDiscovery"] = True
     return payload
@@ -146,6 +257,7 @@ def settings_from_mapping(
     *,
     existing_api_key: str = "",
     require_model: bool = True,
+    presets: tuple[ModelProviderPreset, ...] | None = None,
 ) -> ModelServiceSettings:
     """从一份载荷折设置。
 
@@ -155,7 +267,7 @@ def settings_from_mapping(
 
     return build_model_service_settings(
         raw,
-        presets=PROVIDER_PRESETS,
+        presets=presets or _configured_provider_presets(),
         aliases=PROVIDER_ID_ALIASES,
         default_models={},
         existing_api_key=existing_api_key,
@@ -175,10 +287,16 @@ def effective_settings_from_config(config_module: Any) -> ModelServiceSettings:
 def infer_provider_id(*, protocol: str, base_url: str) -> str:
     """从协议与端点反推供应商；只在**本项目目录里有的 id** 之间挑。"""
 
+    normalized_url = str(base_url or "").strip().rstrip("/").lower()
+    configured = _configured_provider_presets()
+    for preset in configured:
+        if preset.base_url and normalized_url == preset.base_url.rstrip("/").lower():
+            return preset.id
+
     return shared_infer_provider_id(
         protocol=protocol,
         base_url=base_url,
-        provider_ids=PRESET_BY_ID,
+        provider_ids=preset_index(configured),
     )
 
 
@@ -207,6 +325,7 @@ def public_model_services_snapshot(
     目录之外的条目（自定义兼容服务）会追加在后面，所以用户自己加过的服务不会丢。
     """
 
+    presets = _configured_provider_presets()
     registry = store.load_registry()
     records = registry.get("providers") if isinstance(registry.get("providers"), dict) else {}
     effective = effective_settings_from_config(config_module)
@@ -214,9 +333,13 @@ def public_model_services_snapshot(
     active_settings = store.load() or effective
     entries: list[dict[str, Any]] = []
 
-    for preset in PROVIDER_PRESETS:
+    for preset in presets:
         raw = records.get(preset.id)
-        settings = settings_from_mapping(raw, require_model=False) if isinstance(raw, dict) else None
+        settings = (
+            settings_from_mapping(raw, require_model=False, presets=presets)
+            if isinstance(raw, dict)
+            else None
+        )
         metadata = probe_metadata(raw if isinstance(raw, dict) else {})
         if settings is None:
             settings = environment_settings_for_provider(preset.id, config_module)
@@ -229,14 +352,14 @@ def public_model_services_snapshot(
             )
         )
 
-    known_ids = {preset.id for preset in PROVIDER_PRESETS}
+    known_ids = {preset.id for preset in presets}
     for provider_id, raw in records.items():
         if provider_id in known_ids or not isinstance(raw, dict):
             continue
         entries.append(
             public_provider_entry(
                 preset=None,
-                settings=settings_from_mapping(raw, require_model=False),
+                settings=settings_from_mapping(raw, require_model=False, presets=presets),
                 metadata=probe_metadata(raw),
                 active=(provider_id == active_id),
             )
@@ -283,7 +406,7 @@ def environment_settings_for_provider(
                         "providerId": provider_id,
                         "apiKey": key,
                         "baseUrl": base,
-                        "chatModel": model or PROVIDER_DEFAULT_MODELS.get(provider_id, ""),
+                        "chatModel": model or provider_default_models().get(provider_id, ""),
                     },
                     require_model=False,
                 )
@@ -305,7 +428,7 @@ def environment_settings_for_provider(
                     "chatModel": str(
                         getattr(raw_settings, f"{prefix}_MODEL_NAME", "") or ""
                     ).strip()
-                    or PROVIDER_DEFAULT_MODELS.get(provider_id, ""),
+                    or provider_default_models().get(provider_id, ""),
                     "protocol": str(getattr(raw_settings, f"{prefix}_API_PROTOCOL", "") or ""),
                 },
                 require_model=False,

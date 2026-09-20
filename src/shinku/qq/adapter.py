@@ -46,7 +46,7 @@ class QQIngressAdapter:
         attention_policy: AttentionPolicy | None = None,
         batcher: AttentionBatcher | None = None,
     ) -> None:
-        self.route_policy = route_policy or ReplyRoutePolicy()
+        self.route_policy = route_policy or ReplyRoutePolicy.from_environment()
         self.attention_policy = attention_policy or AttentionPolicy()
         self.batcher = batcher or AttentionBatcher()
 

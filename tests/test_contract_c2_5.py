@@ -37,6 +37,7 @@ from shinku.llm.runtime import (
     StreamTap,
     normalize_reply_medium,
 )
+from shinku.llm.policy import RuntimePolicy
 from shinku.tools.invocation import NATIVE_TOOL_CALL_FIELD
 
 SRC_FILES = [
@@ -204,6 +205,41 @@ class BundleConfigTests(unittest.TestCase):
         )
         self.assertEqual(runtime.chat.model, "new-model")
 
+    def test_runtime_policy_overrides_transport_without_changing_defaults(self) -> None:
+        policy = RuntimePolicy.from_environment(
+            {
+                "SHINKU_LLM_AUX_TIMEOUT_SECONDS": "31",
+                "SHINKU_LLM_CHAT_TIMEOUT_SECONDS": "47",
+                "SHINKU_LLM_HTTP_ATTEMPTS": "4",
+                "SHINKU_LLM_RETRY_BACKOFF_SECONDS": "0.25",
+                "SHINKU_LLM_STREAM_ATTEMPTS": "3",
+                "SHINKU_LLM_STREAM_RETRY_DELAY_SECONDS": "0.5",
+                "SHINKU_LLM_DEFAULT_MAX_TOKENS": "2048",
+                "SHINKU_LLM_SYSTEM_CACHE_SLOTS": "2",
+                "SHINKU_LLM_CIRCUIT_FAILURE_THRESHOLD": "5",
+                "SHINKU_LLM_CIRCUIT_BASE_COOLDOWN_SECONDS": "17",
+                "SHINKU_LLM_CIRCUIT_MAX_COOLDOWN_SECONDS": "91",
+            }
+        )
+        self.assertEqual(policy.diagnostics()["chat_timeout_seconds"], 47.0)
+        self.assertEqual(policy.diagnostics()["http_attempts"], 4)
+        self.assertEqual(policy.default_max_tokens, 2048)
+        self.assertEqual(policy.circuit_failure_threshold, 5)
+        self.assertEqual(policy.circuit_base_cooldown_seconds, 17.0)
+        self.assertEqual(policy.circuit_max_cooldown_seconds, 91.0)
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "SHINKU_LLM_CHAT_TIMEOUT_SECONDS": "47",
+                "SHINKU_LLM_HTTP_ATTEMPTS": "4",
+            },
+        ):
+            runtime = _make_runtime()
+        self.assertEqual(runtime.runtime_policy.chat_timeout_seconds, 47.0)
+        self.assertEqual(runtime._build_calls[1]["timeout"], 47.0)
+        self.assertEqual(runtime._build_calls[1]["default_max_tokens"], 1024)
+
 
 # --------------------------------------------------------------------------- #
 # 度量与错误通道
@@ -293,6 +329,32 @@ class ErrorChannelTests(unittest.TestCase):
 
 
 class JsonParsingTests(unittest.TestCase):
+    def test_native_tool_calls_keep_the_whole_batch(self) -> None:
+        runtime = _make_runtime(scripts=[("response", FakeResponse(None))])
+        response = runtime.chat.client.scripts[0][1]
+        response.choices[0].message.tool_calls = [
+            SimpleNamespace(
+                id="call-1",
+                function=SimpleNamespace(name="first_tool", arguments='{"value": 1}'),
+            ),
+            SimpleNamespace(
+                id="call-2",
+                function=SimpleNamespace(name="second_tool", arguments='{"value": 2}'),
+            ),
+        ]
+        parsed = runtime.call_chat_json(
+            system_prompt="s",
+            user_prompt="u",
+            fallback={"fallback": 1},
+            native_tools=[
+                {"type": "function", "function": {"name": "first_tool", "parameters": {}}},
+                {"type": "function", "function": {"name": "second_tool", "parameters": {}}},
+            ],
+        )
+        calls = parsed[NATIVE_TOOL_CALL_FIELD]["tool_calls"]
+        self.assertEqual([item["name"] for item in calls], ["first_tool", "second_tool"])
+        self.assertEqual([item["arguments"]["value"] for item in calls], [1, 2])
+
     def test_parse_json_direct_and_wrapped(self) -> None:
         runtime = _make_runtime()
         self.assertEqual(runtime._parse_json('{"a": 1}'), {"a": 1})
@@ -565,6 +627,17 @@ class CallChannelTests(unittest.TestCase):
         self.assertEqual(result, {"fallback": 1})
         self.assertEqual(_metrics(runtime, "chat_json_fallbacks"), 1)
         self.assertEqual(runtime.snapshot_last_error()["type"], "ChatJSONFallback")
+
+    def test_agent_fallback_recovers_plain_text_from_json_ignoring_gateway(self) -> None:
+        runtime = _make_runtime(scripts=[("response", FakeResponse("嗯，收到。"))])
+        result = runtime.call_chat_json(
+            system_prompt="s",
+            user_prompt="u",
+            fallback={"kind": "final", "text": "fallback"},
+        )
+        self.assertEqual(result, {"kind": "final", "text": "嗯，收到。"})
+        self.assertEqual(_metrics(runtime, "chat_json_plain_text_recoveries"), 1)
+        self.assertEqual(_metrics(runtime, "chat_json_fallbacks"), 0)
 
     def test_call_chat_json_falls_back_on_transport_error(self) -> None:
         runtime = _make_runtime(scripts=[("raise", RuntimeError("boom"))])

@@ -5,14 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shinku"
 version = "0.1.0"
-description = "Shinku 独立实现：AI 角色陪伴运行时（洁净室重建，不含 Akane 代码）"
+description = "Local-first memory and context management runtime for AI assistants"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { file = "LICENSE" }
 authors = [{ name = "yueshengqiji" }]
-keywords = ["shinku", "companion", "runtime"]
+keywords = ["memory", "context-management", "agent-runtime", "llm", "python"]
 classifiers = [
-    "Private :: Do Not Upload",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
 ]
 

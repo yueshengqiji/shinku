@@ -37,7 +37,10 @@ class Settings:
     binds: dict[str, str]
 
     def url(self, service: str) -> str:
-        return f"http://127.0.0.1:{self.ports[service]}"
+        host = self.binds[service]
+        if host in {"0.0.0.0", "::", "[::]", "*"}:
+            host = names.DEFAULT_BIND
+        return f"http://{host}:{self.ports[service]}"
 
     def log_path(self, service: str, *, error: bool = False) -> Path:
         suffix = names.LOG_ERROR_SUFFIX if error else names.LOG_SUFFIX
@@ -82,7 +85,11 @@ def load_project_env(
         value = raw_value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        env.setdefault(key, value)
+        # 非空 shell 环境优先；空环境变量不能遮蔽项目 `.env` 里的实际配置。
+        # Windows 启动器常会预先导出一组空的 SHINKU_* 键，单纯 setdefault
+        # 会把这种空值误当成“用户已配置”，导致 API key 等设置永远读不到。
+        if not str(env.get(key, "") or "").strip():
+            env[key] = value
     return env_path
 
 

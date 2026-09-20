@@ -46,6 +46,27 @@ class LlmCircuitBreaker:
             self._trip_count = 0
             self._recovered_at = time.time()
 
+    def configure(
+        self,
+        *,
+        failure_threshold: int,
+        base_cooldown_seconds: float,
+        max_cooldown_seconds: float,
+    ) -> None:
+        """热更新策略并清空旧状态；配置由上层策略对象负责解析。"""
+
+        with self._guard:
+            self.failure_threshold = max(1, int(failure_threshold))
+            self.base_cooldown_seconds = max(1.0, float(base_cooldown_seconds))
+            self.max_cooldown_seconds = max(
+                self.base_cooldown_seconds, float(max_cooldown_seconds)
+            )
+            self._streak = 0
+            self._quiet_until = 0.0
+            self._trip_count = 0
+            self._failed_at = 0.0
+            self._recovered_at = 0.0
+
     def record_failure(self) -> None:
         """记一次上游失败；没攒到阈值就只是计数，不动静默状态。"""
         with self._guard:

@@ -119,20 +119,23 @@
 `docs/ADMISSION.md`、`README.md`、`NOTICE`、`env.example` 是仓库级文档，
 均不在本台账的「代码 + 测试」计数口径内（与 B1 保持一致）。
 
-#### 4.2.3 C1-3 能力清单与资源清单 —— 洁净室重写（含一项纯契约传递依赖）
+#### 4.2.3 C1-3 能力清单与资源清单 —— 能力清单保留，桌宠资源层已撤回
 
-来源侧三个模块都含逻辑、分支与数据处理，因此**不是**契约事实迁移。登记写法
-「契约=`<契约文档>`｜实现独立」。计划登记的三个模块合计 **43,511 字节**；
-本批另落地两个**必须随行**的模块（`manifest.py` 的传递依赖与其转发壳），
-实测五者合计 **44,093 字节**——两个数不是同一集合，见契约 §1。
+2026-09-20 清理确认：`src/shinku/capabilities/` 仍是通用 MCP/插件能力边界；
+`src/shinku/resources/` 从独立项目移除。资源层没有被生产代码装配，保留它只会让
+发布包继续携带桌宠前端语义。下表中的资源路径是历史来源登记，不代表当前文件仍存在。
+
+历史登记曾包含能力清单与桌宠资源清单。当前发布边界只保留能力清单；资源清单
+虽曾按洁净室方式重写，但未被生产链路装配，已在 2026-09-20 撤回。能力模块仍
+按“契约=`<契约文档>`｜实现独立”登记。
 
 | 路径 | 进库日期 | 分类 | 契约 | 依据（契约文档 / 表达层） |
 | --- | --- | --- | --- | --- |
 | `src/shinku/capabilities/manifest.py` | 2026-09-18 | **洁净室重写** | `companion_v01/capability_adapters/manifest.py`（13,024 B） | 契约 `docs/contracts/c1_3_capability_and_resource_manifests.md` §3；表达层：Shinku 撰写（按领域改置 `capabilities/`；控制流改为「私有异常短路 + 边界统一转换」；不定义任何数据类型，全部取自 C1-1 的 `contracts/capability`） |
-| `src/shinku/resources/manifest.py` | 2026-09-18 | **洁净室重写** | `companion_v01/resource_manifest.py`（30,352 B） | 同上 §4；表达层：Shinku 撰写（把「文件系统 → 清单字典」拆进独立的内部索引类；合并类操作改为模块级纯函数；来源侧是 47 方法的单类） |
+| `src/shinku/resources/manifest.py` | 2026-09-20 | **已移除** | `companion_v01/resource_manifest.py`（30,352 B） | 历史首版曾洁净室重写；确认未被生产链路装配后撤回，避免携带桌宠资源语义 |
 | `src/shinku/capabilities/safety.py` | 2026-09-18 | **洁净室重写** | `companion_v01/capability_safety.py`（371 B） | 同上 §2；表达层：Shinku 撰写。**它是纯契约（3 个常量），本可按契约事实迁移登记**；但它是 A2 列入重写清单的高相似模块（0.800，与共享包仅 docstring 不同），且本批必须落地它，故归入洁净室重写并单独登记。这项登记**同时了结 A2 重写清单里的 `capability_safety.py`** |
 | `src/shinku/capabilities/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 本仓库新建 |
-| `src/shinku/resources/__init__.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无（包导出面） | 本仓库新建 |
+| `src/shinku/resources/__init__.py` | 2026-09-20 | **已移除** | 无（包导出面） | 随资源索引层一并撤回 |
 | `tests/test_contract_c1_3.py` | 2026-09-18 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；断言对象为契约的外部可观察行为，含失败测试、边界扫描与契约表达式定点断言 |
 
 **两个转发壳没有对应的新模块，这是本批的表达层决定**（契约 §1.3）：
@@ -142,13 +145,10 @@
 | `companion_v01/capability_adapters/manifest_loader.py` | 135 | 不建模块，`load_manifest` 的直接导入路径就是 `shinku.capabilities.manifest` | 内容只有 `from .manifest import *` + `__all__` 转发；保留中转模块等于把旧仓库的目录形状固化进新仓库 |
 | `companion_v01/capability_adapters/safety.py` | 211 | 不建模块，常量由 `shinku.capabilities.safety` 直接提供 | 同上，只转发 `..capability_safety` 的三个名字 |
 
-**C1-3 的合格判据不是相似度，而是「有契约文档 + 独立测试 + 实现独立」。** 四项证据：
+**保留的能力清单合格判据不是相似度，而是「有契约文档 + 独立测试 + 实现独立」。** 四项证据：
 
 1. 契约文档 `docs/contracts/c1_3_capability_and_resource_manifests.md`（只记录外部可观察行为）；
-2. 独立测试 `tests/test_contract_c1_3.py`（**143 个用例**，含 **31 条拒绝路径用例**
-   （覆盖契约 §3.6 的 **19 个原因码**，读失败类 `yaml_parse_error`／`read_error` 另由
-   `ManifestReadFailureTests` 覆盖 ⇒ 21 个原因码全数覆盖）、8 条优先级顺序、
-   边界扫描与契约表达式定点断言）；
+2. 独立测试 `tests/test_contract_c1_3.py`（覆盖成功、拒绝和安全边界）；
 3. 实现独立：旧模块的 **56 个私有名**（模块级 11 + 类内 35 + capabilities 侧 11 中重合部分）
    在本批五个新文件里**零命中**。这条用 `tokenize` 取**精确标识符 token** 比对，
    不用子串匹配——`_text` / `_key` / `_meta` / `_background` 这类短名字用子串匹配会把
@@ -157,8 +157,8 @@
    且两处都只剩领域词 `capability`（12–13 字符）本身。**输出文案（提示词段落与标签）
    是外部可观察输出，属契约事实，不在散文口径内**（契约 §0.1）。
 
-**C1-3 未做的事：** 未装配——`load_manifest` 未接进任何注册表，`ResourceManifest` 未接进
-`api/app.py`，两者均属 C4/C6；未迁移旧项目 `docs/fixtures/capability_adapter_m1/*.yaml`
+**C1-3 未做的事：** 未装配——`load_manifest` 未接进任何注册表，属后续 Agent/插件接线范围；
+未迁移旧项目 `docs/fixtures/capability_adapter_m1/*.yaml`
 与本批测试夹具无关（测试在临时目录里现造 YAML 与目录树）；
 未碰 `capability_adapters/` 下的 `protocol`、`registry`、`comfyui` 等其余能力模块。
 
@@ -1218,6 +1218,281 @@ C4-21 用离线 fake runtime 验证 C4-18～C4-20 的真实组合路径：两条
 failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 diff check 通过。
 没有监听端口、读取密钥或重启 NapCat。
 
+#### 4.2.44 C5-1 独立记忆路由、生命周期与只读迁移
+
+本批没有把旧库的语义摘要直接变成长记忆。独立版新增自己的 SQLite 记忆层：普通回合
+进入原始/短期事件层，明确回忆或模糊路由判定后才生成 `MemoryContext`；明确的“请记住”
+进入事实层，显式“忘记/清除/不要记”会让匹配记录不可检索；短期事件默认 30 天后过期。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/memory/` | 2026-09-20 | `INDEPENDENT_KEEP` | 本仓库新建 | 路由、SQLite 分层存储、生命周期、遗忘和迁移适配 |
+| `src/shinku/qq/agent_bridge.py` | 2026-09-20 | **洁净室重写** | C4-19 Agent 桥接 | 以可选 `MemoryService` 注入带来源的记忆上下文 |
+| `src/shinku/qq/assembly.py` | 2026-09-20 | **洁净室重写** | C4-20 装配 | 独立记忆数据库和模型路由器配置 |
+| `scripts/migrate_shinku_memory.py` | 2026-09-20 | `INDEPENDENT_KEEP` | 本仓库新建 | 旧库只读导入；不复制 Chroma 向量，不升级旧摘要为事实 |
+| `docs/MEMORY_DESIGN.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 本仓库新建 | 生命周期、作用域和迁移规则 |
+| `tests/test_memory.py` | 2026-09-20 | `INDEPENDENT_KEEP` | 本仓库新建 | 普通回合不检索、模型路由、作用域和遗忘回归 |
+| `scripts/check_shinku_memory.py` | 2026-09-20 | `INDEPENDENT_KEEP` | 本仓库新建 | 对迁入库执行只读普通回合/回忆/来源灰测 |
+
+**迁移证据：** 源库只读导入 **4460** 条原始消息、**175** 条摘要、**8** 条语义摘要、
+**8** 条 Lessons 和 **5** 条临时状态，共 **4656** 条独立历史事件；独立长期事实仍为
+**0** 条。记忆专项回归 **4 passed / 0 failed**；compileall 通过。全套 QQ 回归尚未在
+本机系统 Python 上执行，因为环境缺少已声明的 `openai` 依赖。
+
+#### 4.2.45 C5-2 独立记忆链路灰度
+
+本批验证 C5-1 的记忆层已经接入独立 QQ Agent 桥接，而不是只有数据库迁移。普通聊天
+不会注入历史；明确回忆按当前会话作用域检索带来源记录；明确遗忘后不再返回；不同群组
+作用域互相隔离。灰度只使用临时库和迁移库只读检查，没有真实 QQ 出站。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `tests/test_contract_c5_2.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-1 | 本仓库新建；验证 Agent 桥接中的记忆注入、遗忘和作用域隔离 |
+| `docs/contracts/c5_2_memory_gray.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 本仓库新建；记录本地灰度边界和结果 |
+
+**验收证据：** 独立桥接灰测 **1 passed / 0 failed**；配置、记忆和灰测组合回归
+**9 passed / 0 failed**；compileall、diff check 和 `127.0.0.1:19998/health` 通过。
+真实 NapCat 出站仍关闭，旧 `9998` 未修改。
+
+#### 4.2.46 C5-3 并行入站灰度的路由修复
+
+首条真实 QQ 灰测确认 NapCat 已同时上报旧、新两个入口，但独立版没有形成回合。排查
+发现真实 OneBot payload 使用 `self_id` 标识机器人，独立路由此前只认显式 bot ID 或
+测试标志 `at_bot`，导致 @ 真红的真实群消息被错误过滤。修复后，路由在没有显式配置
+bot ID 时回退使用事件 `self_id`，同时保留显式配置优先级。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/qq/routing.py` | 2026-09-20 | **洁净室修正** | C4-2 / C5-3 | 使用真实 OneBot `self_id` 识别 @ 机器人 |
+| `tests/test_contract_c4_2.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-3 | 新增真实 payload 形状回归 |
+| `docs/contracts/c4_17_parallel_forward_stage.md` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-3 | 记录首条真实灰测与修复边界 |
+
+**验收证据：** 路由、记忆和独立桥接回归 **13 passed / 0 failed**；本地 webhook 带
+`self_id` 的事件返回 `scheduled=true`，并写入 `group:gray-self-id` 作用域。真实 QQ
+第二条复测已进入 `group:872732158`，中文码点复核正确；此前终端显示的乱码只是
+PowerShell 展示 Python UTF-8 输出的问题。因此 C5-3 的入站路由、中文入库和作用域链路
+通过，独立出站仍关闭。
+
+#### 4.2.47 C5-4 受控出站灰度与 Agent 纯文本恢复
+
+本批以一条直接送入独立 `19998` 的合成事件验证了独立版到 NapCat action server 的
+最小出站闭环。独立数据库成功保存输入回合，NapCat 日志确认消息由独立版实际发出；
+验证完成后出站开关已恢复为关闭，旧 `9998` 未改动。首轮消息内容为 Agent 兜底句，
+排查后确定不是传输失败，而是供应商忽略 `response_format=json_object`，返回普通文本
+导致 Agent planner 误走 JSON fallback。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/llm/runtime_core.py` | 2026-09-20 | **洁净室修正** | C2-5 / C5-4 | 仅对 Agent fallback 恢复网关返回的纯文本 |
+| `tests/test_contract_c2_5.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-4 | 新增 JSON mode 被网关忽略时的回归 |
+| `docs/contracts/c5_4_controlled_egress.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 记录出站边界、诊断和安全模式 |
+
+新增指标 `chat_json_plain_text_recoveries` 用于观测该兼容路径。聚焦回归 **82 passed /
+0 failed**，全量回归 **1169 passed / 0 failed**，compileall、diff check 和
+`127.0.0.1:19998/health` 均通过。修复后的单条合成出站复测已由 NapCat 确认正常回复
+“嗯，我在这里。”；测试结束后已恢复 `SHINKU_QQ_AGENT_SEND_ENABLED=false`。
+
+#### 4.2.48 C5-5 独立版联合回归与安全默认值
+
+本批把真实 OneBot 事件形状、`self_id` 路由、短窗口调度、记忆入库、Agent 桥接和
+投递边界串成一条离线联合契约。同时将本机 `.env` 的
+`SHINKU_QQ_AGENT_SEND_ENABLED` 固化为 `false`，真实出站必须使用临时进程覆盖，
+避免普通重启意外向 QQ 发消息。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `tests/test_contract_c5_5.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-2 / C5-3 / C5-4 | 新建；验证入站到记忆、Agent 和投递边界，以及 dry-run 不发送 |
+| `docs/contracts/c5_5_joint_regression.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 记录联合契约和安全默认值 |
+| `.env` | 2026-09-20 | 本机运行配置 | C5-5 | 发送开关默认为 `false`，不进入发布包 |
+
+**验收证据：** 新增联合测试 **2 passed / 0 failed**；全量回归 **1171 passed /
+0 failed**；compileall 和 `git diff --check` 通过。19998 保持健康，旧 `9998` 未改动。
+
+#### 4.2.49 C5-6 准入自动检查与健康接口收口
+
+本批把之前只写在 `ADMISSION.md` 的四项人工欠账变成可执行检查：运行时 import graph、
+活动环境变量、来源台账覆盖和直接依赖许可证清单。同时让后端 `/health` 消费已有的
+进程健康原语 `build_basic_health_payload()`，配置字段继续由应用工厂补充，消除两套
+`pid/status` 来源。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `scripts/check_shinku_admission.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-6 | 四项准入自动审计 |
+| `docs/THIRD_PARTY_LICENSES.md` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-6 | 直接依赖许可证清单 |
+| `src/shinku/api/app.py` | 2026-09-20 | **洁净室修正** | C1-5 / C5-6 | `/health` 统一消费进程事实原语 |
+| `tests/test_contract_c5_6.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-6 | 准入审计回归 |
+| `tests/test_health.py` | 2026-09-20 | `INDEPENDENT_KEEP` | C5-6 | 验证健康响应包含进程事实 |
+| `docs/contracts/c5_6_admission_health.md` | 2026-09-20 | `INDEPENDENT_KEEP` | 无 | 批次验收记录 |
+
+**验收证据：** 准入四项全部 PASS；全量回归 **1172 passed / 0 failed**；compileall、
+diff check、`19998/health` 和 `/health/ready` 均通过。旧 `9998` 未修改。
+
+#### 4.2.50 D1 发布边界审计
+
+本批更新了 NOTICE，使其反映当前已经包含的独立运行时代码，而不是停留在 B1 骨架
+描述；新增发布边界审计脚本，核对必需发布文件、媒体素材、准入审计和许可证清单。
+审计确认独立仓库没有图片、音频、视频、字体或其他二进制素材。自动化检查通过，但
+最终发布许可证仍由项目所有者决定，因此当前不能宣称可发布。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `NOTICE` | 2026-09-20 | `INDEPENDENT_KEEP` | D1 | 更新当前独立实现和发布边界声明 |
+| `scripts/audit_shinku_release.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D1 | 发布必需文件、素材和准入综合审计 |
+| `docs/RELEASE_AUDIT.md` | 2026-09-20 | `INDEPENDENT_KEEP` | D1 | 发布前人工门槛和执行说明 |
+| `tests/test_contract_d1.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D1 | 发布边界审计回归 |
+
+**验收证据：** `AUTOMATED_AUDIT=PASS`、媒体文件数量为 0；全量回归 **1173 passed /
+0 failed**；compileall 和 diff check 通过。审计明确保留 `RELEASE_READY=NO`，原因仅为
+最终许可证选择尚未完成。
+
+#### 4.2.51 D2 清洁发布清单与许可证决策门槛
+
+本批新增清洁发布清单生成器，固定只收集 `src/`、`scripts/`、`docs/`、构建配置和
+发布说明，明确排除 `.env`、运行期 `data/`、缓存、egg-info 和媒体素材；同时将最终
+许可证选择单独记录，避免把当前 `Proprietary` 占位值误当作公开许可证。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `scripts/build_shinku_release_manifest.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D2 | 生成带 SHA-256 的干净发布文件清单 |
+| `docs/LICENSE_DECISION.md` | 2026-09-20 | `INDEPENDENT_KEEP` | D2 | 记录私有、Apache-2.0、MIT 选择门槛 |
+| `tests/test_contract_d2.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D2 | 清单排除规则回归 |
+
+**验收证据：** 清洁清单 **138 files / 0 findings**；D1 审计继续 PASS；专项测试通过。
+最终许可证在本批确定为 Apache-2.0，D3 已完成，后续进入 D4 的最终依赖锁定和发布包复验。
+
+#### 4.2.52 D3 Apache-2.0 落地
+
+项目所有者已选择 Apache-2.0。本批加入完整 `LICENSE`，将 `pyproject.toml`、README、
+NOTICE 和许可证决策记录统一到同一口径，并让发布审计把许可证文件与项目元数据的
+一致性纳入门禁。第三方依赖仍按独立许可证清单处理。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `LICENSE` | 2026-09-20 | `INDEPENDENT_KEEP` | Apache-2.0 官方文本 | Shinku 原创代码的项目许可证 |
+| `pyproject.toml` | 2026-09-20 | `INDEPENDENT_KEEP` | D3 | 元数据指向根目录 LICENSE |
+| `scripts/audit_shinku_release.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D3 | Apache-2.0 元数据一致性门禁 |
+
+下一批进入 D4 的最终依赖锁定和发布包复验；在该复验完成前不切换旧 `9998` 主入口。
+
+#### 4.2.53 D4 依赖锁定与干净发布包复验
+
+本批把 cleanenv 的非 editable 依赖快照固定到 `requirements-cleanenv.lock`，把本轮实际
+验证用的构建工具固定到 `requirements-build.lock`。发布清单扩展为包含 LICENSE、测试和
+锁文件，最终为 194 个文件。新增确定性源码包构建器和产物审计器，分别检查源码包与
+runtime wheel 不含密钥、运行期数据、缓存、媒体素材或构建路径。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `requirements-cleanenv.lock` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | cleanenv 非 editable 依赖快照 |
+| `requirements-build.lock` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | 本轮构建工具版本锁定 |
+| `scripts/build_shinku_release_bundle.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | 确定性源码发布包构建 |
+| `scripts/audit_shinku_artifact.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | zip/wheel 发布产物边界审计 |
+| `docs/RELEASE_ARTIFACT.md` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | 产物、锁文件和复验说明 |
+| `docs/TARGET_REHEARSAL.md` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | 隔离目标环境启动与记忆迁移演练 |
+| `tests/test_contract_d4.py` | 2026-09-20 | `INDEPENDENT_KEEP` | D4 | 依赖、清单和源码包回归 |
+
+**验收证据：** 清洁清单 **194 files / 0 findings**；源码包 **194 entries / PASS**；
+runtime wheel **84 entries / PASS**；D1 发布审计 PASS。D4 不切换旧 `9998`，保持当前
+QQ 安全发送默认值。
+
+#### 4.2.54 E1 正式切换前置检查
+
+本批不执行切换，只把“停机、备份、回滚”前的只读门禁和人工操作顺序固化下来。新增的
+切换检查器只读取旧 `9998`、独立 `19998` 的健康接口和本地发布审计，不停止进程、不改
+端口、不写 NapCat 配置、不打开 QQ 外发。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `scripts/check_shinku_cutover.py` | 2026-09-20 | `INDEPENDENT_KEEP` | E1 | 只读切换前置门禁 |
+| `docs/CUTOVER_RUNBOOK.md` | 2026-09-20 | `INDEPENDENT_KEEP` | E1 | 切换顺序、回滚条件和人工确认项 |
+| `tests/test_contract_d5.py` | 2026-09-20 | `INDEPENDENT_KEEP` | E1 | 前置门禁的只读与失败阻断回归 |
+
+**验收证据：** `OLD_READY=YES`、`NEW_READY=YES`、`RELEASE_READY=YES`；
+`READY_FOR_MANUAL_CUTOVER=YES`；专项测试通过。当前仍未停止旧 `9998`，也未打开 QQ
+真实外发。
+
+#### 4.2.55 P1 工具风险策略与可恢复授权状态
+
+本批把 Agent 工具授权从“所有调用统一拦截、待授权状态只存在桥接内存”拆成独立边界：
+`ExecutionPolicy` 支持 low/medium/high 风险级别和环境覆盖，未知工具仍默认 medium；
+QQ 桥接新增可注入的 pending store，默认保持内存模式，显式配置路径时可用独立 JSON 文件
+跨进程恢复待授权调用。持久化层不进入长期记忆、不执行工具，恢复后仍由当前用户消息经过
+语义授权判断。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/tools/execution.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 风险分级、默认安全策略和环境解析 |
+| `src/shinku/agent/pending.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 内存/JSON 待授权存储抽象 |
+| `src/shinku/agent/approval.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 授权请求风险信息与敏感参数保护 |
+| `src/shinku/agent/loop.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 低风险自动执行与混合批次原子授权 |
+| `src/shinku/qq/agent_bridge.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | QQ 桥接注入 pending store 和风险提示 |
+| `src/shinku/qq/assembly.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 环境配置接线 |
+| `tests/test_contract_c6_1.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 风险策略、跨重启恢复和授权回归 |
+| `docs/contracts/c6_tool_authorization.md` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 授权边界和配置说明 |
+
+**验收证据：** 全量回归 **1054 passed / 0 failed**；`compileall`、发布审计和清洁发布
+清单均通过，清单当前为 **200 files**。默认风险策略未改变已有 QQ 的授权行为。
+
+#### 4.2.56 P1 运行策略统一与待授权 FIFO 队列
+
+在 P1 的授权边界之上继续收拢两类此前散落的可调参数：LLM 传输超时、HTTP/流式重试、
+Anthropic 默认输出长度与系统缓存槽位统一进入 `RuntimePolicy`；同一 QQ 会话的多条待
+授权调用从“后写覆盖前写”改为 FIFO 队列。默认值与旧行为保持一致，部署可通过
+`SHINKU_LLM_*` 环境变量覆盖；`SHINKU_QQ_AGENT_APPROVAL_STORE_PATH` 仍只保存短期待
+授权状态，不进入长期记忆。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/llm/policy.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | LLM 运行策略与边界校验 |
+| `src/shinku/llm/client.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 把默认输出和缓存槽位接到兼容客户端 |
+| `src/shinku/llm/runtime_core.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 统一接入超时、重试和热重载 |
+| `src/shinku/agent/pending.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 内存/JSON FIFO 待授权队列，并兼容旧单记录格式 |
+| `tests/test_contract_c2_5.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 运行策略默认值与覆盖回归 |
+| `tests/test_contract_c6_1.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 同会话待授权 FIFO 回归 |
+| `docs/contracts/c2_5_runtime.md` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 运行策略契约与配置表 |
+
+**验收证据：** 全量回归 **1057 passed / 0 failed**、**1570 subtests passed**；
+`compileall`、`git diff --check`、发布审计均通过，清单当前为 **201 files**。
+
+#### 4.2.57 P1 组合入口运行限额与熔断策略配置化
+
+本批把仍散落在宿主组合点的三个运行参数收拢到 `RuntimeLimits`：QQ 邻近消息合并窗口、
+会话列表上限、会话消息上限。它们只在未显式传参的组合入口读取环境变量，因此直接构造
+底层对象的既有测试和调用仍保留原默认值。同时，LLM 运行策略新增熔断阈值与冷却上限，
+由 `RuntimeCore` 在构建/热重载时同步到共享熔断器，避免熔断器继续使用无法部署调整的常量。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/runtime_limits.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | QQ 窗口和会话限额的环境解析 |
+| `src/shinku/qq/attention.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 默认批次窗口改为读取运行策略 |
+| `src/shinku/qq/turns.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 默认调度窗口改为读取运行策略 |
+| `src/shinku/api/sessions.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 会话路由支持注入/环境限额 |
+| `src/shinku/llm/circuit_breaker.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 支持运行期应用熔断策略 |
+| `tests/test_contract_c1_2.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 会话限额覆盖回归 |
+| `tests/test_contract_c4_3.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | QQ 窗口覆盖回归 |
+
+**验收证据：** 本批定向测试覆盖会话、熔断、LLM runtime 和 QQ 调度边界；全量回归
+**1059 passed / 0 failed**、**1570 subtests passed**，`compileall`、`git diff --check`、
+发布审计均通过，清单当前为 **202 files**。
+
+#### 4.2.58 P1 供应商目录可扩展化
+
+本批保留八项内置供应商作为稳定默认目录，同时允许通过 `SHINKU_PROVIDER_PRESETS_JSON`
+追加自定义 OpenAI/Anthropic/Ollama 兼容项。自定义目录只保存公开元数据，不接受密钥；
+模型默认名继续由 `SHINKU_PROVIDER_DEFAULT_MODELS_JSON` 提供。非法协议、重复/非法 id、
+过长字段和空端点会被逐项忽略，不能覆盖内置条目，也不会改变未配置时的既有目录行为。
+当前未把尚未实现的 response-host、time-manager、browser-host、agent 伪装成可启动服务，
+CLI 仍然对未实现宿主 fail-closed。
+
+| 路径 | 日期 | 分类 | 依据 | 说明 |
+| --- | --- | --- | --- | --- |
+| `src/shinku/providers/catalog.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 自定义供应商目录解析与接线 |
+| `tests/test_contract_c2_3.py` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 自定义目录、能力裁剪和非法项回归 |
+| `docs/contracts/c2_3_model_service.md` | 2026-09-20 | `INDEPENDENT_KEEP` | P1 | 目录扩展契约 |
+
+**验收证据：** 全量回归 **1060 passed / 0 failed**、**1570 subtests passed**；
+`compileall`、`git diff --check`、发布审计均通过，清单当前为 **202 files**。
+
 ## 5. 当前未决
 
 - **C1 四个子批次全部完成**（2026-09-18）：C1-1 契约事实迁移见 §4.2.1；C1-2／C1-3／C1-4
@@ -1248,13 +1523,13 @@ failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 
   预检（§4.2.33），C4-12 已完成入站 webhook 路由（§4.2.34），C4-13 已完成后端挂载
   （§4.2.35），C4-14 已完成启动器接线（§4.2.36），C4-15 已完成独立 `.env` 加载
   （§4.2.37），C4-16 已完成真实本机灰度记录（§4.2.38），C4-17 已完成并行 forward
-  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40），C4-19 已完成 QQ Agent/LLM 桥接（§4.2.41），C4-20 已完成独立 persona/context、runtime 配置与 dry-run 装配（§4.2.42）。下一步是由用户确认后 reload/restart NapCat，再做受控出站回归；现阶段没有让独立版发送 QQ 消息。
+  灰度准备（§4.2.39），C4-18 已完成 QQ 短窗口回合调度器（§4.2.40），C4-19 已完成 QQ Agent/LLM 桥接（§4.2.41），C4-20 已完成独立 persona/context、runtime 配置与 dry-run 装配（§4.2.42）。C5-2 已完成独立记忆链路灰度（§4.2.45），C5-3 已完成并行入站灰度（§4.2.46），C5-4 已完成受控出站传输、Agent 纯文本恢复修正及单条最终复测（§4.2.47），C5-5 已完成联合回归与安全默认值固化（§4.2.48），C5-6 已完成准入自动检查与健康接口收口（§4.2.49）；当前独立版保持安全模式。
 - ~~**C 阶段重写清单里尚未排批的，只剩 `health.py`。**~~ **已于 2026-09-18 由 C1-5 了结**
   （见 §4.2.6）——该清单三项全部落地，**清单已空**，无待排批模块。
   ~~C1-4（`public_guard`、`evidence_guard`、`provider_config`、`native_tool_schema`）~~
   **已于 2026-09-18 完成**，见 §4.2.4。
 - **C1-2 / C1-3 / C1-4 的装配都未做**：`CorrelationIdMiddleware` 与 sessions 路由没接进
-  `api/app.py`；`load_manifest` 没接进任何注册表，`ResourceManifest` 也没接进应用工厂；
+  `api/app.py`；`load_manifest` 没接进任何注册表；
   `PublicThinkGuard` 与证据门没接进任何发送路径。三批都只产出「可被装配的工厂与类」，
   **没有改到运行期服务面**，B1 的健康面与启动链行为不变。因此三批都不做进程探针，
   理由记在各自的批次记录里。
@@ -1266,7 +1541,11 @@ failed**，2286 个 subTest 保持通过，1 个既有 warning；compileall 与 
   合并、并存还是让 B1 那个改成消费本原语，是一次**架构决定**，需要单独拍板；
   在拍板前两边并存，且**本原语当前无消费者**——这一点在台账里说清楚，
   免得后面读的人把「模块存在」误读成「已装配」。
-- **`ADMISSION.md` §4 的自动化检查**仍为欠账（import graph 扫描、文本扫描规则重写、
-  台账完整性、许可证清单）。
+- **C5-6 已完成**：`ADMISSION.md` §4 的四项自动检查均已落地，健康接口双轨也已收口。
+- **D1/D2/D3/D4 已完成**：Apache-2.0 已写入 `LICENSE`、项目元数据和发布审计门禁；
+  cleanenv 依赖、构建工具和两类发布产物均已完成复验。
+- **D4/E1 已完成**：目标环境安装、启动、回滚停止、记忆迁移和只读切换前置检查均通过。
+- **下一步**：由使用者确认具体停机窗口和备份目录后，才执行正式 `9998` 切换；在此之前
+  保持旧 `9998` 与独立 `19998` 并行。
 - 旧项目里的 36 个 `UNCONFIRMED` 与 106 个 `REWRITE_REQUIRED` 的处置方向
   **已定**：分类不动（旧项目 `SOURCE_PROVENANCE.md` §5.7），C 阶段范围按 §5.9 收缩。

@@ -41,6 +41,7 @@ from shinku.providers.catalog import (
     provider_presets_payload,
     public_model_services_snapshot,
     public_model_service_snapshot,
+    provider_default_models,
     settings_from_mapping,
     #: 真红侧的转发壳。取别名是必须的：原名 ``test_model_service`` 会被 pytest
     #: 当成测试用例收集，而它的参数 ``settings`` 不是一个 fixture。
@@ -997,6 +998,50 @@ class CatalogTests(unittest.TestCase):
                 api_key="k", chat_model=""))
             self.assertEqual(store.get_provider("glm").chat_model, "glm-4.5-air")
 
+    def test_default_models_can_be_overridden_without_editing_code(self) -> None:
+        defaults = provider_default_models(
+            {"SHINKU_PROVIDER_DEFAULT_MODELS_JSON": '{"glm":"glm-new","custom":"model-x"}'}
+        )
+        self.assertEqual(defaults["glm"], "glm-new")
+        self.assertEqual(defaults["custom"], "model-x")
+        self.assertEqual(provider_default_models({"SHINKU_PROVIDER_DEFAULT_MODELS_JSON": "not-json"})["glm"], "glm-4.5-air")
+
+    def test_custom_provider_catalog_can_be_added_without_editing_code(self) -> None:
+        custom = json.dumps(
+            [
+                {
+                    "id": "my_gateway",
+                    "label": "我的网关",
+                    "protocol": "openai",
+                    "baseUrl": "https://gateway.example/v1",
+                    "description": "局域网之外的兼容服务",
+                    "capabilities": ["stream", "native_tools", "unsupported"],
+                },
+                {"id": "bad id", "protocol": "openai", "baseUrl": "https://bad.example/v1"},
+            ]
+        )
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "SHINKU_PROVIDER_PRESETS_JSON": custom,
+                "SHINKU_PROVIDER_DEFAULT_MODELS_JSON": '{"my_gateway":"gateway-chat"}',
+            },
+        ):
+            payload = catalog_module.provider_presets_payload()
+            settings = settings_from_mapping(
+                {
+                    "providerId": "my_gateway",
+                    "baseUrl": "https://gateway.example/v1",
+                    "apiKey": "secret",
+                    "chatModel": "gateway-chat",
+                }
+            )
+        self.assertIn("my_gateway", {row["id"] for row in payload})
+        custom_row = next(row for row in payload if row["id"] == "my_gateway")
+        self.assertEqual(custom_row["capabilities"], ["stream", "native_tools"])
+        self.assertEqual(settings.provider_id, "my_gateway")
+        self.assertNotIn("bad id", {row["id"] for row in payload})
+
     def test_infer_provider_id_stays_inside_the_catalog(self) -> None:
         self.assertEqual(infer_provider_id(protocol="openai", base_url=_GLM_BASE), "glm")
         self.assertEqual(infer_provider_id(protocol="openai",
@@ -1475,7 +1520,7 @@ class C2_3BoundaryTests(unittest.TestCase):
             "test_model_service", "validate_model_service_settings",
         })
         self.assertEqual(set(catalog_module.__all__), {
-            "MODEL_SERVICE_SCHEMA_VERSION", "PROVIDER_DEFAULT_MODELS",
+            "MODEL_SERVICE_SCHEMA_VERSION", "PROVIDER_DEFAULT_MODELS", "provider_default_models",
             "PROVIDER_ID_ALIASES", "PROVIDER_PRESETS", "PRESET_BY_ID",
             "ModelProviderPreset", "ModelServiceConfigStore",
             "apply_model_service_settings", "effective_settings_from_config",

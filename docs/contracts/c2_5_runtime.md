@@ -112,6 +112,32 @@ False`、`_maybe_record_audit(...) → no-op`）。即在「不启用原生工�
 | `LLM_THINKING_MODE` | `SHINKU_LLM_THINKING_MODE` | `disabled` |
 | `PROMPT_CACHE_HINTS_ENABLED` / `PROMPT_CACHE_HINTS_FORCE` / `PROMPT_CACHE_RETENTION` / `PROMPT_CACHE_NAMESPACE` | `SHINKU_PROMPT_CACHE_*` | `True`/`False`/`""`/`shinku`（C2-5c 生效） |
 
+### 5.1 传输运行策略
+
+超时、重试、流式重试、Anthropic 兼容层的默认输出长度和系统缓存块数量由
+`shinku.llm.policy.RuntimePolicy` 统一承载。默认值保持原有行为；部署时可通过下列
+`SHINKU_LLM_*` 环境变量覆盖，避免把供应商差异继续散落在 `RuntimeCore`、客户端和
+流式分支中：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `SHINKU_LLM_AUX_TIMEOUT_SECONDS` | `90` | 辅助模型请求超时 |
+| `SHINKU_LLM_CHAT_TIMEOUT_SECONDS` | `120` | 主聊天模型请求超时 |
+| `SHINKU_LLM_HTTP_ATTEMPTS` | `2` | 可重试 HTTP 调用次数 |
+| `SHINKU_LLM_RETRY_BACKOFF_SECONDS` | `0.8` | HTTP 重试退避基数 |
+| `SHINKU_LLM_STREAM_ATTEMPTS` | `2` | 流式连接尝试次数 |
+| `SHINKU_LLM_STREAM_RETRY_DELAY_SECONDS` | `1` | 流式重试间隔 |
+| `SHINKU_LLM_DEFAULT_MAX_TOKENS` | `1024` | Anthropic 兼容层未指定时的输出上限 |
+| `SHINKU_LLM_SYSTEM_CACHE_SLOTS` | `4` | Anthropic 系统块缓存槽位 |
+| `SHINKU_LLM_CIRCUIT_FAILURE_THRESHOLD` | `3` | 连续失败达到此值后进入静默 |
+| `SHINKU_LLM_CIRCUIT_BASE_COOLDOWN_SECONDS` | `60` | 第一次熔断冷却时长 |
+| `SHINKU_LLM_CIRCUIT_MAX_COOLDOWN_SECONDS` | `600` | 指数退避的最大冷却时长 |
+
+`RuntimeCore.reload_from_config()` 会重新读取环境策略；也可以在测试或嵌入场景中显式
+传入 `RuntimePolicy`，从而不依赖进程级环境变量。每个字段有边界校验，非法值回退到
+默认值，不改变既有调用面。runtime 构建或热重载时会把三项熔断参数同步到进程级
+共享熔断器；已有失败状态会随配置切换清零，避免旧阈值和新阈值混用。
+
 `PersistentCounterStore` 在新仓不存在：可选导入，缺失时 `_counter_store=None`
 退回内存计数。`metrics_path=None` 时两侧同无持久化，对拍安全。
 

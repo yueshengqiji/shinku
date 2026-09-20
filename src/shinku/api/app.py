@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from .. import __version__
 from .. import names
 from ..config import Settings, load_settings
+from ..health import build_basic_health_payload
 from ..qq.host import NapCatHost
 from ..qq.webhook import create_napcat_webhook_router
 
@@ -82,12 +83,11 @@ def create_app(
         把端口和路径回显出来是有意的——旧项目吃过"以为连的是这台、其实是另一台"的亏。
         """
 
-        return {
-            "status": "ok",
+        payload = build_basic_health_payload()
+        payload.update({
             "project": resolved.project,
             "version": resolved.version,
             "service": SERVICE,
-            "pid": os.getpid(),
             "bind": resolved.binds[SERVICE],
             "port": resolved.ports[SERVICE],
             "allow_lan": resolved.allow_lan,
@@ -96,7 +96,8 @@ def create_app(
             "log_root": str(resolved.log_root),
             "log_file": str(resolved.log_path(SERVICE)),
             "correlation_header": names.CORRELATION_ID_HEADER,
-        }
+        })
+        return payload
 
     @app.get("/health/ready")
     def ready() -> dict[str, object]:

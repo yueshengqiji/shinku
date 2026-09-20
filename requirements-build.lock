@@ -1,0 +1,5 @@
+# Exact temporary build tool set used to verify the D4 release artifacts on
+# 2026-09-20. These are build helpers, not Shinku runtime dependencies.
+packaging==26.3
+setuptools==84.0.0
+wheel==0.48.0

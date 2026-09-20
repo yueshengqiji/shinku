@@ -1,97 +1,118 @@
 # Shinku
 
-Shinku 的**独立实现**仓库。AI 角色陪伴运行时。
+面向 AI 助手的本地优先记忆与上下文管理运行时。
 
-本仓库是**洁净室重建**产物：它不包含 `AkaneCompanionLab` 的任何源码、测试、配置或素材。
-业务模块在 C 阶段按行为契约逐个重写后加入，每加入一个模块就更新 `NOTICE` 与
-`docs/SOURCE_RECORD.md`。
+Shinku 的重点不是某个具体角色，而是把长期记忆、短期事件、上下文裁剪、工具授权和模型调用组织成可替换的运行时框架。它可以作为本地助手、聊天机器人或其他 Agent 应用的后端基础。
 
-## 当前状态（C4-20：Agent 装配边界已完成）
+## 设计重点
 
-本仓库已经完成 C1～C4-20 的独立洁净室重写边界：LLM runtime、AgentLoop、ToolHost、
-QQ/NapCat 入站、图片视觉桥、短窗口回合合并、独立 persona 加载和 QQ Agent dry-run
-装配均已落地。当前仍处于灰度接线阶段，真实 NapCat 出站默认关闭，尚未替换旧项目的
-9998 服务。
+### 记忆不是每轮全量注入
 
-严格分类下，旧项目 183 个运行时文件里只有 2 个具备 `INDEPENDENT_KEEP` 依据，
-其余是 106 个 `REWRITE_REQUIRED` + 36 个 `UNCONFIRMED`。按计划 B 的验收口径
-（"不存在 `UNCONFIRMED` 或 `REWRITE_REQUIRED` 文件进入独立发布包"），
-**B1 阶段一个业务文件都不能搬进来**。
+每一轮请求都经过受范围约束的记忆路由，而不是把整个数据库塞进提示词：
 
-最初 B1 交付的是：
+```text
+incoming turn
+  -> memory router
+  -> ordinary chat: no unnecessary historical retrieval
+  -> explicit recall: deterministic retrieval
+  -> ambiguous request: lightweight routing
+  -> scoped retrieval
+  -> MemoryContext with sources
+  -> model / agent prompt
+```
 
-| 内容 | 位置 |
-| --- | --- |
-| 命名契约（包名 / 环境变量 / 端口 / 路径 / 日志名 / 服务名） | `src/shinku/names.py` |
-| 配置加载（不读旧项目的 `config.py` / `.env`） | `src/shinku/config.py` |
-| 后端应用工厂 + 健康探针 | `src/shinku/api/app.py` |
-| 命令行入口（`doctor` / `serve`） | `src/shinku/cli.py` |
-| 五个宿主的落点（C 阶段填充） | `src/shinku/hosts/` |
-| 准入规则：哪些分类允许进入本仓库 | `docs/ADMISSION.md` |
-| 旧项目作为只读来源档案的说明 | `docs/SOURCE_RECORD.md` |
+记忆层分为：
+
+- 原始对话与旁观记录：保留可追溯来源；
+- 短期事件与阶段摘要：帮助承接近期话题；
+- 已确认的长期事实：只保存相对稳定、可复用的信息；
+- 遗忘记录：记录降权、过期和删除，避免旧信息永久占据上下文。
+
+### 上下文管理
+
+- 将近期对话、长期记忆、工具结果和系统状态分开管理；
+- 按当前任务检索，而不是按关键词堆叠记忆；
+- 工具返回结果默认不直接升级为长期记忆；
+- 接近上下文上限时进行摘要、裁剪和来源保留；
+- 对模型调用策略、超时、重试和输出长度集中管理。
+
+### Agent 与工具边界
+
+AgentLoop、ToolHost、能力清单、风险等级和人工授权是分开的。工具并不因为被声明就自动获得本机权限：
+
+- 只读、低风险能力可以直接执行；
+- 中风险能力按策略进入待授权队列；
+- 高风险能力默认拒绝自动执行；
+- 工具调用结果会带着来源和状态回到上下文管理层。
+
+本次公开版本只保留通用能力边界和图片/视觉输入桥接，不附带本地 CLI、Shell、文件删除、浏览器 Cookie 或内网控制等高风险 MCP。详见 [`docs/MCP_SCOPE.md`](docs/MCP_SCOPE.md)。
+
+## 当前版本包含
+
+- Python 运行时、FastAPI 后端和 CLI；
+- 多供应方 LLM 适配与统一调用策略；
+- SQLite 记忆存储、长期事实、摘要和遗忘流程；
+- AgentLoop、工具 schema、能力清单与授权边界；
+- QQ/NapCat 图片输入与视觉引用桥接；
+- 测试、发布审计、依赖锁定和独立运行文档。
 
 ## 安装
 
+需要 Python 3.11 或更高版本：
+
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -e ".[dev]"
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -e ".[dev]"
 ```
 
-**不需要** Akane 目录、`code_shared` 或任何旧项目的环境变量。这是 B 阶段验收条款。
+如果只运行后端，可以省略 `[dev]`。
 
 ## 使用
 
-```powershell
-# 看它到底解析到了哪套配置（数据根 / 端口 / 日志名）
-.venv\Scripts\shinku.exe doctor
-
-# 起后端
-.venv\Scripts\shinku.exe serve --service backend
-# 然后： curl http://127.0.0.1:9998/health
-```
+运行自检：
 
 ```powershell
-# 测试
-.venv\Scripts\python.exe -m pytest
+shinku doctor
 ```
 
-## 命名约定
+启动后端：
 
-完整契约在 `src/shinku/names.py`，这里只列要点：
+```powershell
+shinku serve --service backend
+```
 
-| 项 | 值 |
-| --- | --- |
-| 包名 / 发行名 | `shinku` |
-| 环境变量前缀 | `SHINKU_` |
-| 服务名 | `backend` · `response-host` · `time-manager` · `browser-host` · `agent` |
-| 默认端口 | 9998 / 9995 / 9996 / 9997 / 9100 |
-| 默认绑定 | `127.0.0.1`（要暴露到局域网必须显式开 `SHINKU_ALLOW_LAN`） |
-| 关联 ID 头 | `X-Correlation-ID`（线路协议，不随项目改名而改） |
-| 服务令牌头 | `X-Shinku-Service-Token` |
+健康检查：
 
-### 明确不继承的两个旧命名
+```text
+http://127.0.0.1:9998/health
+```
 
-1. **`COMPANION_HOST` / `COMPANION_PORT`** —— Akane 时代的命名。旧项目
-   `companion_v01/service_supervisor.py` 至今仍在设置它们。新项目不使用，后端走
-   `SHINKU_BACKEND_HOST` / `SHINKU_BACKEND_PORT`。设了旧键会被**忽略并告警**
-   （`shinku doctor` 会打出来，测试里有覆盖）。
-2. **`SHINKU_SERVER_HOST` / `SHINKU_SERVER_PORT`** —— 旧项目里它指的是
-   **Agent(Java) 宿主**的 9100 端口，"SERVER" 与实际语义不符。新项目不继承这个歧义，
-   Agent 宿主走 `SHINKU_AGENT_HOST` / `SHINKU_AGENT_PORT`。
+供应方、模型和环境变量示例见 [`.env.example`](.env.example)。不要把真实 API key、Cookie、聊天记录或运行期 `data/` 提交到 Git。
 
-代价是旧项目的 `.env` 不能直接搬过来。这是有意的——旧配置里混着 Akane 时代的键名，
-搬过来等于把污染也搬过来。
+## 文档入口
 
-### 数据根换了位置
+- [记忆与上下文设计](docs/MEMORY_DESIGN.md)
+- [MCP 与外部能力发布范围](docs/MCP_SCOPE.md)
+- [发布审计](docs/RELEASE_AUDIT.md)
+- [第三方依赖与许可证](docs/THIRD_PARTY_LICENSES.md)
+- [来源与独立实现记录](docs/SOURCE_RECORD.md)
 
-旧项目默认把可变数据放在仓库内的 `users_data/`；新项目按平台约定放在用户目录：
+## 项目边界与版权
 
-- Windows：`%LOCALAPPDATA%\Shinku\{data,config,logs}`
-- macOS：`~/Library/Application Support/Shinku/{data,config,logs}`
-- Linux：`$XDG_STATE_HOME/shinku/{data,config,logs}`
+本仓库发布的是通用的记忆、上下文、Agent 和工具授权框架，不包含任何特定角色的人设原文、游戏台词、小说或剧本内容、配音、音乐、美术、Live2D、网络素材或第三方账号数据。
 
-要保留旧行为就设 `SHINKU_DATA_ROOT`。
+“Shinku”在这里是项目名称。本项目不主张任何相关角色、作品、名称、形象或其他原作材料的著作权，也不授予使用这些原作材料的许可。使用者如自行接入角色资料或外部素材，应自行确认来源和授权。
 
-## 许可
+本仓库原创代码、测试和文档采用 Apache-2.0，见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。第三方依赖仍受其各自许可证约束，清单见 [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md)。
 
-见 `NOTICE`。本仓库尚未确定发布许可——这属于 D 阶段"发布边界审计"的范围。
+## 开发与验证
+
+```powershell
+python -m pytest
+python scripts/audit_shinku_release.py
+python scripts/build_shinku_release_manifest.py
+```
+
+发布前还应检查没有把本地配置、运行期数据、凭据、角色素材或高危工具实现带入提交。

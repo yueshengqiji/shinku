@@ -18,14 +18,23 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from shinku.runtime_limits import RuntimeLimits
+
 #: 会话列表与消息列表的返回上限。
 SESSION_LIST_LIMIT = 50
 MESSAGE_LIMIT = 120
+
+
+@dataclass(frozen=True)
+class _SessionLimits:
+    list_limit: int = SESSION_LIST_LIMIT
+    message_limit: int = MESSAGE_LIMIT
 
 #: 非法 JSON 时回显的原因截断长度——不要把这个当成错误详情通道。
 _REASON_CHARS = 160
@@ -141,10 +150,16 @@ def build_sessions_router(
     resolve_identity: IdentityResolver,
     normalize_pack_id: PackIdNormalizer,
     build_error_payload: ErrorPayloadBuilder,
+    limits: RuntimeLimits | None = None,
 ) -> APIRouter:
     """装配会话路由。"""
 
     router = APIRouter()
+    runtime_limits = limits or RuntimeLimits.from_environment()
+    session_limits = _SessionLimits(
+        list_limit=runtime_limits.session_list_limit,
+        message_limit=runtime_limits.session_message_limit,
+    )
 
     def record(name: str, started: float, ok: bool) -> None:
         metrics.observe_request(name, duration_ms=(time.perf_counter() - started) * 1000, ok=ok)
@@ -212,14 +227,14 @@ def build_sessions_router(
             "session": session,
             "sessions": sessions.list_sessions(
                 profile_user_id=profile_user_id,
-                limit=SESSION_LIST_LIMIT,
+                limit=session_limits.list_limit,
                 character_pack_id=character_pack_id,
             ),
             "messages": sessions.get_session_messages(
                 profile_user_id=profile_user_id,
                 session_id=session_id,
                 character_pack_id=character_pack_id,
-                limit=MESSAGE_LIMIT,
+                limit=session_limits.message_limit,
             ),
             "latest_final_json": _latest_final_json(
                 sessions, profile_user_id, session_id, character_pack_id
@@ -234,7 +249,7 @@ def build_sessions_router(
         try:
             listed = sessions.list_sessions(
                 profile_user_id=profile_user_id,
-                limit=SESSION_LIST_LIMIT,
+                limit=session_limits.list_limit,
                 character_pack_id=pack_id,
             )
         except Exception as exc:
@@ -312,7 +327,7 @@ def build_sessions_router(
                 "session": renamed,
                 "sessions": sessions.list_sessions(
                     profile_user_id=profile_user_id,
-                    limit=SESSION_LIST_LIMIT,
+                    limit=session_limits.list_limit,
                     character_pack_id=pack_id,
                 ),
             }

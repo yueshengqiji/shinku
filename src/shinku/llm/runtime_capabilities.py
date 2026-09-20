@@ -85,27 +85,42 @@ class RuntimeCapabilitiesMixin:
         allowed = str(self._env("NATIVE_TOOL_PROVIDER_ALLOWLIST", "") or "").strip()
         clean_host = str(host or "").strip().lower()
         clean_model = str(model or "").strip().lower()
-        if not allowed or not clean_host or not clean_model:
+        if not clean_host or not clean_model:
             return DEFAULT_PROVIDER_TOOL_PROFILE
-        for raw in allowed.split(","):
-            parsed = self._parse_allowlist_item(raw)
-            if parsed is None:
-                continue
-            item_host, item_model, coexist_json = parsed
-            if item_host not in {"*", clean_host} or item_model not in {"*", clean_model}:
-                continue
-            if coexist_json:
-                return ProviderToolProfile(
-                    supports_native_tools=True,
-                    native_tools_coexist_with_forced_json=True,
-                    verified=False,
-                    notes=(
-                        "Enabled by NATIVE_TOOL_PROVIDER_ALLOWLIST with json coexistence. "
-                        "Use only after probing the gateway/model."
-                    ),
-                )
-            return CONFIG_ALLOWLISTED_PROVIDER_TOOL_PROFILE
+        if allowed:
+            for raw in allowed.split(","):
+                parsed = self._parse_allowlist_item(raw)
+                if parsed is None:
+                    continue
+                item_host, item_model, coexist_json = parsed
+                if item_host not in {"*", clean_host} or item_model not in {"*", clean_model}:
+                    continue
+                if coexist_json:
+                    return ProviderToolProfile(
+                        supports_native_tools=True,
+                        native_tools_coexist_with_forced_json=True,
+                        verified=False,
+                        notes=(
+                            "Enabled by NATIVE_TOOL_PROVIDER_ALLOWLIST with json coexistence. "
+                            "Use only after probing the gateway/model."
+                        ),
+                    )
+                return CONFIG_ALLOWLISTED_PROVIDER_TOOL_PROFILE
+        if self._flag_env("NATIVE_TOOL_ALLOW_UNKNOWN_MODEL"):
+            return ProviderToolProfile(
+                supports_native_tools=True,
+                native_tools_coexist_with_forced_json=False,
+                verified=False,
+                notes=(
+                    "Enabled by NATIVE_TOOL_ALLOW_UNKNOWN_MODEL. "
+                    "The gateway/model capability was not verified by the built-in table."
+                ),
+            )
         return DEFAULT_PROVIDER_TOOL_PROFILE
+
+    def _flag_env(self, suffix: str) -> bool:
+        raw = str(self._env(suffix, "") or "").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     def _parse_allowlist_item(self, value: Any) -> tuple[str, str, bool] | None:
         text = str(value or "").strip().lower()
@@ -156,21 +171,33 @@ class RuntimeCapabilitiesMixin:
         calls = self._value_of(message, "tool_calls")
         if not isinstance(calls, list) or not calls:
             return None
-        if len(calls) > 1:
-            self._add_metric("native_tool_calls_extra", len(calls) - 1)
-        first = calls[0]
-        function = self._value_of(first, "function")
-        name = str(self._value_of(function, "name") or "").strip()
-        if not name or _CALL_NAME_RE.fullmatch(name) is None:
+        normalized: list[dict[str, Any]] = []
+        for raw_call in calls:
+            function = self._value_of(raw_call, "function")
+            name = str(self._value_of(function, "name") or "").strip()
+            if not name or _CALL_NAME_RE.fullmatch(name) is None:
+                continue
+            normalized.append(
+                {
+                    "name": name,
+                    "arguments": self._decode_tool_args(self._value_of(function, "arguments")),
+                    "source": NATIVE_OPENAI,
+                    "id": str(self._value_of(raw_call, "id") or "").strip(),
+                }
+            )
+        if not normalized:
             return None
+        if len(normalized) > 1:
+            self._add_metric("native_tool_calls_extra", len(normalized) - 1)
+        first = normalized[0]
         result = {
-            **self._decode_tool_args(self._value_of(function, "arguments")),
-            "type": name,
+            **dict(first.get("arguments") or {}),
+            "type": first["name"],
             TOOL_SOURCE_FIELD: NATIVE_OPENAI,
+            "tool_calls": normalized,
         }
-        call_id = str(self._value_of(first, "id") or "").strip()
-        if call_id:
-            result[TOOL_INVOCATION_ID_FIELD] = call_id
+        if first.get("id"):
+            result[TOOL_INVOCATION_ID_FIELD] = first["id"]
         return result
 
     def _collect_stream_tool_parts(self, chunk: Any, parts: dict[int, dict[str, Any]]) -> None:
@@ -202,20 +229,33 @@ class RuntimeCapabilitiesMixin:
         if not parts:
             return None
         indexes = sorted(parts)
-        if len(indexes) > 1:
-            self._add_metric("native_tool_calls_extra", len(indexes) - 1)
-        first = parts.get(indexes[0]) or {}
-        name = str(first.get("name") or "").strip()
-        if not name or _CALL_NAME_RE.fullmatch(name) is None:
+        normalized: list[dict[str, Any]] = []
+        for index in indexes:
+            item = parts.get(index) or {}
+            name = str(item.get("name") or "").strip()
+            if not name or _CALL_NAME_RE.fullmatch(name) is None:
+                continue
+            normalized.append(
+                {
+                    "name": name,
+                    "arguments": self._decode_tool_args("".join(str(piece) for piece in item.get("arguments_parts", []))),
+                    "source": NATIVE_OPENAI,
+                    "id": str(item.get("id") or "").strip(),
+                }
+            )
+        if not normalized:
             return None
+        if len(normalized) > 1:
+            self._add_metric("native_tool_calls_extra", len(normalized) - 1)
+        first = normalized[0]
         result = {
-            **self._decode_tool_args("".join(str(piece) for piece in first.get("arguments_parts", []))),
-            "type": name,
+            **dict(first.get("arguments") or {}),
+            "type": first["name"],
             TOOL_SOURCE_FIELD: NATIVE_OPENAI,
+            "tool_calls": normalized,
         }
-        call_id = str(first.get("id") or "").strip()
-        if call_id:
-            result[TOOL_INVOCATION_ID_FIELD] = call_id
+        if first.get("id"):
+            result[TOOL_INVOCATION_ID_FIELD] = first["id"]
         return result
 
     def _decode_tool_args(self, value: Any) -> dict[str, Any]:

@@ -51,6 +51,7 @@ PYTHON_SERVICE_NAMES: tuple[str, ...] = (
 )
 
 DEFAULT_BIND = "127.0.0.1"
+SERVICE_URL_HOST_ENV = ENV_PREFIX + "SERVICE_URL_HOST"
 
 #: 端口保持与旧项目一致，避免迁移期口径漂移；
 #: 换端口是配置动作，不是架构动作，所以这里不做"重新编号"。
@@ -200,6 +201,16 @@ def log_path(service: str, *, error: bool = False, environ: Mapping[str, str] | 
 
 
 def service_url(service: str, environ: Mapping[str, str] | None = None) -> str:
-    """服务的基础 URL（回环调用用）。"""
+    """服务的基础 URL。
 
-    return f"http://127.0.0.1:{service_port(service, environ)}"
+    绑定到 ``0.0.0.0``/``::`` 时不能把通配地址当成客户端目标；默认回退到
+    回环。需要在容器、局域网或反向代理下使用其他可达地址时，可显式设置
+    ``SHINKU_SERVICE_URL_HOST``，从而不必改代码。
+    """
+
+    env = os.environ if environ is None else environ
+    configured = str(env.get(SERVICE_URL_HOST_ENV, "") or "").strip()
+    host = configured or service_bind(service, env)
+    if host in {"0.0.0.0", "::", "[::]", "*"}:
+        host = DEFAULT_BIND
+    return f"http://{host}:{service_port(service, env)}"

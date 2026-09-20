@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Generator
 
 from shinku.llm.client import build_llm_client
+from shinku.llm.policy import RuntimePolicy
 from shinku.tools.invocation import (
     NATIVE_OPENAI,
     NATIVE_TOOL_CALL_FIELD,
@@ -51,7 +52,7 @@ except ImportError:  # pragma: no cover - 可选依赖缺失
 
 logger = logging.getLogger("shinku.llm_debug")
 
-#: 一次调用最多打两次（瞬时错误重试一次）；再多就交给上层兜底。
+#: 默认值保留为模块常量，实际运行时由 ``RuntimePolicy`` 统一接管。
 _HTTP_ATTEMPTS = 2
 _RETRY_BACKOFF = 0.8
 _RETRYABLE_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
@@ -223,8 +224,8 @@ class StreamTap:
     """流式顶层 JSON 的增量抽取器。
 
     逐字符扫过流式片段，在对象还没拼完整时就把 ``emotion`` / ``speech`` /
-    ``reply_medium`` / ``speech_segments`` 抽出来变成 UI 事件，让桌宠和
-    gal 前端能边收边播。``feed()`` 返回本次新产生的事件列表。
+    ``reply_medium`` / ``speech_segments`` 抽出来变成 UI 事件，让不同宿主
+    能边收边播。``feed()`` 返回本次新产生的事件列表。
     """
 
     def __init__(self):
@@ -488,7 +489,15 @@ class StreamTap:
 class RuntimeCore:
     """``LLMRuntime`` 的传输骨架（详见模块 docstring 的职责切分）。"""
 
-    def __init__(self, *, metrics_path: Path | None = None):
+    def __init__(
+        self,
+        *,
+        metrics_path: Path | None = None,
+        runtime_policy: RuntimePolicy | None = None,
+    ):
+        self.runtime_policy = runtime_policy or RuntimePolicy.from_environment()
+        self._runtime_policy_from_environment = runtime_policy is None
+        self._apply_circuit_policy()
         self._swap_lock = threading.RLock()
         self.aux = self._make_aux_bundle()
         self.chat = self._make_chat_bundle()
@@ -526,6 +535,7 @@ class RuntimeCore:
             "token_usage_reports_chat": 0,
             "token_usage_reports_aux": 0,
             "chat_json_fallbacks": 0,
+            "chat_json_plain_text_recoveries": 0,
             "chat_stream_rescue_attempts": 0,
             "chat_stream_rescue_successes": 0,
             "chat_stream_rescue_failures": 0,
@@ -553,7 +563,13 @@ class RuntimeCore:
     # bundle 构建与热切换
     # ------------------------------------------------------------------ #
 
-    def reload_from_config(self) -> dict[str, str]:
+    def reload_from_config(self, *, runtime_policy: RuntimePolicy | None = None) -> dict[str, str]:
+        if runtime_policy is not None:
+            self.runtime_policy = runtime_policy
+            self._runtime_policy_from_environment = False
+        elif self._runtime_policy_from_environment:
+            self.runtime_policy = RuntimePolicy.from_environment()
+        self._apply_circuit_policy()
         aux = self._make_aux_bundle()
         chat = self._make_chat_bundle()
         with self._swap_lock:
@@ -565,13 +581,29 @@ class RuntimeCore:
             "chatModel": chat.model,
         }
 
+    def _apply_circuit_policy(self) -> None:
+        """让进程级熔断器跟随本次 runtime 策略，而不是固定在模块默认值。"""
+
+        try:
+            from shinku.llm.circuit_breaker import get_llm_circuit_breaker
+
+            get_llm_circuit_breaker().configure(
+                failure_threshold=self.runtime_policy.circuit_failure_threshold,
+                base_cooldown_seconds=self.runtime_policy.circuit_base_cooldown_seconds,
+                max_cooldown_seconds=self.runtime_policy.circuit_max_cooldown_seconds,
+            )
+        except Exception:
+            logger.debug("unable to apply circuit policy", exc_info=True)
+
     def _make_aux_bundle(self) -> ModelBundle:
         client = build_llm_client(
             api_key=self._env("AUX_API_KEY"),
             base_url=self._env("AUX_BASE_URL"),
             protocol=self._env("AUX_API_PROTOCOL", "auto"),
-            timeout=90.0,
+            timeout=self.runtime_policy.aux_timeout_seconds,
             max_retries=0,
+            default_max_tokens=self.runtime_policy.default_max_tokens,
+            system_cache_slots=self.runtime_policy.system_cache_slots,
         )
         return ModelBundle(client=client, model=self._env("AUX_MODEL_NAME"))
 
@@ -580,8 +612,10 @@ class RuntimeCore:
             api_key=self._env("CHAT_API_KEY"),
             base_url=self._env("CHAT_BASE_URL"),
             protocol=self._env("CHAT_API_PROTOCOL", "auto"),
-            timeout=120.0,
+            timeout=self.runtime_policy.chat_timeout_seconds,
             max_retries=0,
+            default_max_tokens=self.runtime_policy.default_max_tokens,
+            system_cache_slots=self.runtime_policy.system_cache_slots,
         )
         return ModelBundle(client=client, model=self._env("CHAT_MODEL_NAME"))
 
@@ -754,12 +788,42 @@ class RuntimeCore:
             recovered = self._recover_partial(content, fallback=fallback)
             if isinstance(recovered, dict):
                 return recovered
+            plain_text = self._recover_agent_plain_text(content, fallback=fallback)
+            if isinstance(plain_text, dict):
+                self._add_metric("chat_json_plain_text_recoveries")
+                return plain_text
             self._note_parse_failure(content, phase="call_json")
         except Exception as exc:
             self._add_metric("errors")
             self._note_error(exc, phase="call_json")
         self._add_metric("chat_json_fallbacks")
         return dict(fallback)
+
+    def _recover_agent_plain_text(
+        self,
+        content: Any,
+        *,
+        fallback: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """保留 Agent 的纯文本答复，兼容不尊重 JSON mode 的网关。
+
+        Agent planner 的结构化外壳是 ``{"kind": "final", "text": ...}``，
+        但部分 OpenAI 兼容网关即使收到 ``response_format=json_object``，仍会
+        返回正常的一句文本。对记忆路由等其它结构化调用不能做这个推断，只有
+        明确带 Agent ``kind`` 的 fallback 才允许降级为 final 文本。
+        """
+
+        if not isinstance(fallback, dict):
+            return None
+        kind = str(fallback.get("kind") or "").strip().lower()
+        if kind not in {"final", "wait", "waiting_user"}:
+            return None
+        text = str(content or "").strip()
+        if not text or text.startswith("{") or text.startswith("["):
+            return None
+        recovered = dict(fallback)
+        recovered["text"] = text[:4000]
+        return recovered
 
     # ------------------------------------------------------------------ #
     # NDJSON 事件流通道
@@ -931,7 +995,7 @@ class RuntimeCore:
         tool_probe_disabled = False
         # 连接层兜底：整个流还没产出任何内容时才重试一次，
         # 已经流出去的内容不能重复发。
-        max_stream_attempts = 2
+        max_stream_attempts = self.runtime_policy.stream_attempts
         stream_attempt = 0
         yielded_any = False
         cache_usage_reported = False
@@ -998,7 +1062,8 @@ class RuntimeCore:
                 # 只在还没产出任何内容（连接层失败）时重试一次
                 if stream_attempt < max_stream_attempts and not yielded_any and not raw_parts:
                     self._add_metric("chat_stream_retries")
-                    time.sleep(1.0)
+                    if self.runtime_policy.stream_retry_delay_seconds:
+                        time.sleep(self.runtime_policy.stream_retry_delay_seconds)
                     continue
             finally:
                 cache_usage_reported = self._record_cache(
@@ -1458,8 +1523,9 @@ class RuntimeCore:
                 # 429 / 5xx / 超时是瞬时的：多试一次能救回一整轮回复
                 # （2026-09-13 一次限流风暴里 61/111 轮直接吞回答）。
                 self._add_metric("llm_http_retry")
-                if attempt < _HTTP_ATTEMPTS:
-                    time.sleep(_RETRY_BACKOFF * attempt)
+                if attempt < self.runtime_policy.http_attempts:
+                    if self.runtime_policy.retry_backoff_seconds:
+                        time.sleep(self.runtime_policy.retry_backoff_seconds * attempt)
                     continue
                 raise
 
@@ -1486,14 +1552,14 @@ class RuntimeCore:
                 return result
             raise
         except Exception as exc:
-            if attempt < _HTTP_ATTEMPTS and is_retryable_llm_error(exc):
+            if attempt < self.runtime_policy.http_attempts and is_retryable_llm_error(exc):
                 # 瞬时错误：记明细但不记熔断失败，交给上层重试循环。
                 self._note_error(exc, phase=f"http_retry_{attempt}")
                 try:
                     logger.warning(
                         "LLM call retryable failure (attempt %s/%s): %s | %s",
                         attempt,
-                        _HTTP_ATTEMPTS,
+                        self.runtime_policy.http_attempts,
                         type(exc).__name__,
                         str(exc)[:200],
                     )
