@@ -2,7 +2,7 @@
 
 ## 已完成
 
-- 保留旧的 `akane-event`：`http://127.0.0.1:9998/api/qq/napcat/event`；
+- 保留旧的 `legacy-event`：`http://127.0.0.1:9998/api/qq/napcat/event`；
 - 追加独立版接收端：`shinku-standalone-gray` → `http://127.0.0.1:19998/events/napcat`；
 - 修改前已备份 OneBot 配置文件；
 - 独立版已用独立运行目录启动在 `19998`；

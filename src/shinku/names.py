@@ -4,21 +4,20 @@
 
 为什么要单独一个模块
 --------------------
-旧项目里同一含义的字符串散落在多个文件中——`os.getenv("SHINKU_RESPONSE_HOST_PORT", "9995")`
+早期实现里同一含义的字符串散落在多个文件中——`os.getenv("SHINKU_RESPONSE_HOST_PORT", "9995")`
 在不同文件里各写一遍，改一个默认值要全局搜。这里把它们收成一份**声明**：
 其它模块只从本模块取值，不再自己写字面量。
 
-不继承的两个旧命名（重要）
+不继承的两个历史命名（重要）
 --------------------------
 1. ``COMPANION_HOST`` / ``COMPANION_PORT``
-   Akane 时代的命名，旧项目 ``companion_v01/service_supervisor.py`` 仍在设置它们。
-   新项目**不使用**；后端入口统一走 ``SHINKU_BACKEND_*``。
+   早期运行时的旧命名。新项目**不使用**；后端入口统一走 ``SHINKU_BACKEND_*``。
 2. ``SHINKU_SERVER_HOST`` / ``SHINKU_SERVER_PORT``
-   旧项目里它指的是 **Agent(Java) 宿主**的 9100 端口，名字里的 "SERVER" 与实际语义不符。
+   历史实现里它指的是 **Agent 宿主**的 9100 端口，名字里的 "SERVER" 与实际语义不符。
    新项目**不继承这个歧义**；Agent 宿主统一走 ``SHINKU_AGENT_*``。
 
 这样做的代价：旧项目的 ``.env`` 不能直接搬过来，需要按新名字重写。
-这是有意的——旧配置里混着 Akane 时代的键名，搬过来等于把污染也搬过来。
+这是有意的——旧配置里混着历史键名，直接搬过来会把不必要的兼容负担也搬过来。
 """
 
 from __future__ import annotations

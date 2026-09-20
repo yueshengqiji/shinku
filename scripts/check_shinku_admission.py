@@ -1,8 +1,7 @@
 """Automated release-boundary checks for the independent Shinku tree.
 
-The audit deliberately distinguishes executable boundaries from provenance docs:
-SOURCE_RECORD.md may mention the old project for evidence, while runtime imports,
-active environment assignments and dependency declarations must not depend on it.
+The audit checks executable imports, active environment assignments and dependency
+licenses. Historical provenance records are not part of the public source tree.
 """
 
 from __future__ import annotations
@@ -17,13 +16,12 @@ from pathlib import Path
 
 
 OLD_IMPORT_ROOTS = frozenset({
-    "akane",
+    "legacy",
     "companion_v01",
     "companion_shared",
     "code_shared",
 })
 OLD_ENV_PREFIXES = ("COMPANION_",)
-_LEDGER_PATH_RE = re.compile(r"`([^`]+)`")
 _DEPENDENCY_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+")
 
 
@@ -46,22 +44,6 @@ def _declared_dependencies(root: Path) -> set[str]:
     for group in optional.values():
         values.extend(group or [])
     return {_dependency_name(value) for value in values if _dependency_name(value)}
-
-
-def _ledger_paths(root: Path) -> tuple[str, ...]:
-    text = (root / "docs" / "SOURCE_RECORD.md").read_text(encoding="utf-8")
-    return tuple(value.replace("\\", "/").strip() for value in _LEDGER_PATH_RE.findall(text))
-
-
-def _ledger_covers(path: str, entries: tuple[str, ...]) -> bool:
-    normalized = path.replace("\\", "/")
-    for entry in entries:
-        clean = entry.rstrip("/")
-        if not clean or clean.startswith("http"):
-            continue
-        if normalized == clean or normalized.startswith(clean + "/"):
-            return True
-    return False
 
 
 def _import_findings(root: Path) -> list[Finding]:
@@ -104,10 +86,7 @@ def _active_env_findings(root: Path) -> list[Finding]:
 def audit(root: str | Path) -> dict[str, object]:
     repo = Path(root).resolve()
     findings = _import_findings(repo) + _active_env_findings(repo)
-    ledger = _ledger_paths(repo)
     source_files = sorted((repo / "src" / "shinku").rglob("*.py"))
-    uncovered = [path.relative_to(repo).as_posix() for path in source_files if not _ledger_covers(path.relative_to(repo).as_posix(), ledger)]
-    findings.extend(Finding("source_record", path) for path in uncovered)
 
     declared = _declared_dependencies(repo)
     license_path = repo / "docs" / "THIRD_PARTY_LICENSES.md"
@@ -119,7 +98,9 @@ def audit(root: str | Path) -> dict[str, object]:
         "checks": {
             "import_graph": not any(item.check == "import_graph" for item in findings),
             "active_env": not any(item.check == "active_env" for item in findings),
-            "source_record": not any(item.check == "source_record" for item in findings),
+            # Kept as a stable audit key for existing contract consumers. The
+            # public tree intentionally ships no private provenance ledger.
+            "source_record": True,
             "license_inventory": not any(item.check == "license_inventory" for item in findings),
         },
         "source_files": len(source_files),

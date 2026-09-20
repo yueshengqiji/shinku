@@ -5,7 +5,7 @@ the parts of Shinku talk to one another.  Nothing in here reaches out to a host,
 a database, a model SDK or a workflow engine, so every layer - including the
 standalone hosts - can depend on it without pulling the rest of the runtime in.
 
-Source provenance for this package is recorded in ``docs/SOURCE_RECORD.md``.
+The package is documented by the public runtime and contract documentation.
 """
 
 from __future__ import annotations

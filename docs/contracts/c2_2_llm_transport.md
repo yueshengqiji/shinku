@@ -37,8 +37,8 @@
 | --- | --- | ---: | --- |
 | `llm/client.py` | `code_shared/code_shared/llm_client.py` | 13,660 | 对照物本身（上游） |
 
-**对照物判定（SKILL 规矩六）：** Akane 侧 `services/llm_client.py` 只有 **839 B**，
-主体是 `from code_shared.llm_client import *` 再加一个 `_akane_protocol` 标记 ——
+**对照物判定（SKILL 规矩六）：** legacy 侧 `services/llm_client.py` 只有 **839 B**，
+主体是 `from code_shared.llm_client import *` 再加一个 `_legacy_protocol` 标记 ——
 **转发壳，不能当对照物**。Shinku 旧侧 `services/llm_client.py`（13,167 B）是独立改写
 （body 相似度 0.3115），**只进 `LEGACY_NAMES` 并集，不作来源**。
 

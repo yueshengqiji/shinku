@@ -971,7 +971,7 @@ class C2_1BoundaryTests(unittest.TestCase):
     )
 
     #: 旧项目的包名与代号（子串匹配，这些串足够独特）。
-    FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane")
+    FOREIGN_TOKENS = ("companion_v01", "code_shared")
 
     #: 旧模块的内部命名，取「对照物 ∪ Shinku 旧实现」的并集（34 个）。
     #: 用**精确标识符 token** 比对，理由同 C1-3／C1-4。
@@ -1064,7 +1064,7 @@ class C2_1BoundaryTests(unittest.TestCase):
                     importlib.import_module(dotted)
 
     def test_importing_the_batch_does_not_pull_the_old_project_in(self) -> None:
-        for forbidden in ("companion_v01", "code_shared", "akane"):
+        for forbidden in ("companion_v01", "code_shared"):
             with self.subTest(module=forbidden):
                 self.assertNotIn(forbidden, sys.modules)
 

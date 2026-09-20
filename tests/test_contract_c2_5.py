@@ -71,7 +71,7 @@ LEGACY_NAMES = [
     "_last_error",
 ]
 
-FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane", "COMPANION_", "SHINKU_SERVER_")
+FOREIGN_TOKENS = ("companion_v01", "code_shared", "COMPANION_", "SHINKU_SERVER_")
 
 
 # --------------------------------------------------------------------------- #

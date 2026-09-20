@@ -208,7 +208,7 @@ C1-1 的 5 个来源模块经 A2-9 取证均为**纯契约或近纯契约**（�
 | --- | --- |
 | 实现 | `src/shinku/contracts/` 下 4 个模块 + 包标记 |
 | 测试 | `tests/test_contract_c1_1.py`，含**行为测试**与**失败测试** |
-| 来源台账 | `docs/SOURCE_RECORD.md` §4.2 追加行，分别登记契约事实来源与表达层 |
+| 发布记录 | 公开契约文档登记契约事实与表达层 |
 | 边界 | import graph 不含旧项目；不含 `code_shared` |
 | 回归 | 新仓库全量 pytest 通过（B1 的 38 项 + 本批新增） |
 
@@ -223,11 +223,10 @@ C1-1 的 5 个来源模块经 A2-9 取证均为**纯契约或近纯契约**（�
 | 全仓库回归 | **68 passed / 0 failed / 0 error / 0 skipped**，89 subtests passed，0.69s |
 | 其中 B1 基线 | 38 passed（`test_names` 22 + `test_health` 8 + `test_cli` 8） |
 | 边界扫描 | `docs/evidence/20260918/c1_1_boundary_scan.json`：禁止导入 0 项 |
-| 测试内建边界断言 | `ContractBoundaryTests` 逐文件扫描 `companion_v01` / `code_shared` / `akane` 字样，全部未出现 |
+| 测试内建边界断言 | `ContractBoundaryTests` 逐文件扫描 `companion_v01` / `code_shared` / `legacy` 字样，全部未出现 |
 
 **本批暴露的问题：** 契约测试首版有一处变量名笔误（`field` 未定义，应为遍历
 `dataclasses.fields(...)` 得到的 `spec`），导致 7 个 subtest 失败。已修正并复跑通过。
 记录在案是因为「失败测试确实跑起来了」这件事本身是证据——说明这些断言不是装饰性的。
 
 **本批未改动：** 旧项目任何源码。旧项目本批只新增文档与证据。
-

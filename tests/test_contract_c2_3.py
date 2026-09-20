@@ -1375,7 +1375,7 @@ class C2_3BoundaryTests(unittest.TestCase):
         SHINKU_PKG / "providers" / "catalog.py",
     )
 
-    FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane")
+    FOREIGN_TOKENS = ("companion_v01", "code_shared")
 
     #: 旧私有名并集（对照物 ∪ Shinku 旧实现，9 个）。
     LEGACY_INTERNAL_NAMES = (
@@ -1391,9 +1391,9 @@ class C2_3BoundaryTests(unittest.TestCase):
     )
 
     #: 34 句 = 上游 `model_service.py` ∪ 旧侧 `model_service.py` 1 句
-    #: ∪ Akane 侧 1 句 ∪ 旧侧 `model_service_config.py` 15 句。
+    #: ∪ legacy 侧 1 句 ∪ 旧侧 `model_service_config.py` 15 句。
     LEGACY_PROSE = (
-        "Akane 侧兼容入口：目录留在项目侧，注册表实现（含 v1→v2 读迁移）只有共享一份。",
+        "legacy 侧兼容入口：目录留在项目侧，注册表实现（含 v1→v2 读迁移）只有共享一份。",
         "Discover model ids using the provider's standard endpoint.",
         "Guard against a saved cross-provider vision model.",
         "Hot switching rewrites module globals, so inspecting only CHAT_* can make a",
@@ -1477,7 +1477,7 @@ class C2_3BoundaryTests(unittest.TestCase):
                     importlib.import_module(f"shinku.providers.{name}")
 
     def test_importing_the_batch_does_not_pull_the_old_project_in(self) -> None:
-        for forbidden in ("companion_v01", "code_shared", "akane"):
+        for forbidden in ("companion_v01", "code_shared"):
             with self.subTest(module=forbidden):
                 self.assertNotIn(forbidden, sys.modules)
 

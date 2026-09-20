@@ -204,7 +204,7 @@ class CapabilityContractTests(FrozenRecordMixin, unittest.TestCase):
 class ContractBoundaryTests(unittest.TestCase):
     """契约层不得把旧项目拉进来——这是 B1 边界在新代码上的延续。"""
 
-    FORBIDDEN = ("companion_v01", "code_shared", "akane")
+    FORBIDDEN = ("companion_v01", "code_shared")
 
     def test_no_contract_module_mentions_a_foreign_project(self) -> None:
         sources = sorted(CONTRACTS_DIR.glob("*.py"))

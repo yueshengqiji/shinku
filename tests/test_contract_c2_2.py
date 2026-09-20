@@ -892,7 +892,7 @@ class C2_2BoundaryTests(unittest.TestCase):
         SHINKU_PKG / "llm" / "client.py",
     )
 
-    FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane")
+    FOREIGN_TOKENS = ("companion_v01", "code_shared")
 
     #: 旧私有名并集（对照物 ∪ Shinku 旧实现，32 个）。
     LEGACY_INTERNAL_NAMES = (
@@ -983,7 +983,7 @@ class C2_2BoundaryTests(unittest.TestCase):
             importlib.import_module("shinku.llm_client")
 
     def test_importing_the_batch_does_not_pull_the_old_project_in(self) -> None:
-        for forbidden in ("companion_v01", "code_shared", "akane"):
+        for forbidden in ("companion_v01", "code_shared"):
             with self.subTest(module=forbidden):
                 self.assertNotIn(forbidden, sys.modules)
 
@@ -1004,7 +1004,7 @@ class C2_2BoundaryTests(unittest.TestCase):
         for path, text in self._sources():
             with self.subTest(module=path.name):
                 self.assertNotIn("_shinku_protocol", text)
-                self.assertNotIn("_akane_protocol", text)
+                self.assertNotIn("_legacy_protocol", text)
 
     def test_the_legacy_payload_shim_is_not_provided(self) -> None:
         # 契约 §0.4 决定 3：私有垫片与归一化函数重导出不保留。

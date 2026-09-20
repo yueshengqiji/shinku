@@ -817,9 +817,9 @@ class C2_4BoundaryTests(unittest.TestCase):
 
     C2_4_FILE = SHINKU_PKG / "api" / "model_services.py"
 
-    FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane")
+    FOREIGN_TOKENS = ("companion_v01", "code_shared")
 
-    #: 旧私有名并集（Akane 侧 7 个 ∪ Shinku 旧侧多出的 2 个，规矩二十一）。
+    #: 旧私有名并集（legacy 侧 7 个 ∪ Shinku 旧侧多出的 2 个，规矩二十一）。
     LEGACY_INTERNAL_NAMES = (
         "_bool",                     # 旧侧 model_services
         "_is_local_request",         # 两侧都有

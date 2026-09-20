@@ -28,14 +28,14 @@
 
 | 新落点 | 来源对照物 | 对照物字节 | 行为基准 |
 | --- | --- | ---: | --- |
-| `llm/circuit_breaker.py` | Akane `companion_v01/llm_circuit_breaker.py` | 3,573 | 同一份（与 Shinku 旧侧逐字节相同） |
+| `llm/circuit_breaker.py` | legacy `companion_v01/llm_circuit_breaker.py` | 3,573 | 同一份（与 Shinku 旧侧逐字节相同） |
 | `text/tokenizer.py` | `code_shared/code_shared/text_tokenizer.py` | 1,144 | Shinku 旧侧 `companion_v01/text_utils.py` 的 `tokenize` |
 | `providers/embedding.py` | `code_shared/code_shared/embedding_provider.py` | 5,384 | Shinku 旧侧 `companion_v01/embedding_provider.py` |
 | `providers/huggingface.py` | `code_shared/code_shared/huggingface_provider.py` | 4,305 | Shinku 旧侧 `companion_v01/huggingface_provider.py` |
 
-**对照物判定（SKILL 规矩六）：** `embedding_provider.py` 在 Akane 侧是 628 B / 20 行的
+**对照物判定（SKILL 规矩六）：** `embedding_provider.py` 在 legacy 侧是 628 B / 20 行的
 转发壳、`huggingface_provider.py` 是 279 B / 10 行的转发壳，都不能当上游实现；
-`text_tokenizer.py` 在 Akane 侧不存在。三者都改用 `code_shared` 的真实现。
+`text_tokenizer.py` 在 legacy 侧不存在。三者都改用 `code_shared` 的真实现。
 
 **为什么 `text/tokenizer.py` 在本批：** 它是 `embedding.py` 的**传递依赖**——
 `embedding.py` 用 `tokenize()` 做 hashed embedding 的分词。

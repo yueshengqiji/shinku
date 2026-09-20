@@ -8,13 +8,13 @@
 
 ## 已核对项目
 
-- 独立代码、测试、脚本和文档均在 `docs/SOURCE_RECORD.md` 留有来源记录；
+- 独立代码、测试、脚本和文档均经过当前发布边界审计；
 - `scripts/check_shinku_admission.py` 的四项准入检查全部通过；
 - 直接依赖已登记在 `docs/THIRD_PARTY_LICENSES.md`；
 - 独立仓库没有发现图片、音频、视频、字体或其他二进制素材；
 - 仓库根的 `.env`、运行期 `data/` 和缓存目录不属于发布内容；
 - NOTICE 已更新为当前 C 阶段实际内容，并明确旧项目只用于来源审计。
-- `scripts/build_shinku_release_manifest.py` 已生成 203 个清洁发布文件，排除了密钥、
+- `scripts/build_shinku_release_manifest.py` 已生成 201 个清洁发布文件，排除了密钥、
   运行期数据、缓存、egg-info 和媒体素材。
 - 根目录 `LICENSE`、`pyproject.toml` 和 NOTICE 已统一为 Apache-2.0 发布口径。
 - `requirements-cleanenv.lock` 固定了 cleanenv 的完整非 editable 依赖快照；

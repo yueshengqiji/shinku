@@ -97,7 +97,6 @@ http://127.0.0.1:9998/health
 - [MCP 与外部能力发布范围](docs/MCP_SCOPE.md)
 - [发布审计](docs/RELEASE_AUDIT.md)
 - [第三方依赖与许可证](docs/THIRD_PARTY_LICENSES.md)
-- [来源与独立实现记录](docs/SOURCE_RECORD.md)
 
 ## 项目边界与版权
 

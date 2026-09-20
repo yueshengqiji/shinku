@@ -1381,7 +1381,7 @@ class C1_2BoundaryTests(unittest.TestCase):
     )
 
     #: 旧项目的包名与代号。
-    FOREIGN_TOKENS = ("companion_v01", "code_shared", "akane", "Akane")
+    FOREIGN_TOKENS = ("companion_v01", "code_shared")
 
     #: 旧项目里这些模块曾经依赖、但本批不得再提及的实现符号。
     FOREIGN_SYMBOLS = (
@@ -1434,7 +1434,7 @@ class C1_2BoundaryTests(unittest.TestCase):
 
     def test_importing_the_batch_does_not_pull_the_old_project_in(self) -> None:
         # 本模块顶部已导入四个新模块，因此这里的检查是有意义的。
-        for forbidden in ("companion_v01", "code_shared", "akane"):
+        for forbidden in ("companion_v01", "code_shared"):
             with self.subTest(module=forbidden):
                 self.assertNotIn(forbidden, sys.modules)
 

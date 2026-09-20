@@ -5,7 +5,7 @@
 | 新仓模块 | 对照物 | 关系 |
 | --- | --- | --- |
 | `shinku.providers.service` | `code_shared/model_service.py`（23,836 B / 637 行） | 上游真实现；**洁净室重写** |
-| `shinku.providers.catalog` | 上游无对应物；Akane 侧 4,062 B 仅作接线核对；行为基线取旧侧 `companion_v01/model_service_config.py` | 真红侧策略；**洁净室重写** |
+| `shinku.providers.catalog` | 上游无对应物；legacy 侧 4,062 B 仅作接线核对；行为基线取旧侧 `companion_v01/model_service_config.py` | 真红侧策略；**洁净室重写** |
 
 `service` 是**与项目无关**的原语：一份连接参数怎么折出来、怎么校验、怎么存、怎么探测。
 `catalog` 是**真红自己的**半边：目录里有哪几家、别名、默认模型、把设置写回项目配置的方式。
@@ -16,12 +16,12 @@
 
 ## 0. 本批的三个决定
 
-### 决定 1：`catalog` 的对拍对照侧取**旧侧真红**，不是 Akane 侧
+### 决定 1：`catalog` 的对拍对照侧取**旧侧真红**，不是 legacy 侧
 
-Akane 那份 4,062 B 只是共享契约的薄包装（没有 GLM 目录、没有别名、没有环境变量回退、
+legacy 那份 4,062 B 只是共享契约的薄包装（没有 GLM 目录、没有别名、没有环境变量回退、
 没有视觉模型守卫、没有原生工具开关），拿它对拍等于什么都没对。
 真红的行为基线是旧侧 `companion_v01/model_service_config.py`。
-Akane 那份在本批只用于**分辨共享契约与项目策略**（进 `LEGACY_NAMES` 并集）。
+legacy 那份在本批只用于**分辨共享契约与项目策略**（进 `LEGACY_NAMES` 并集）。
 
 ### 决定 2：`model_service_settings_payload` 的键序跟上游，不跟旧侧
 

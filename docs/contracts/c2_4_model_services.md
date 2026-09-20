@@ -2,13 +2,13 @@
 
 | 新仓模块 | 对照物 | 关系 |
 | --- | --- | --- |
-| `shinku.api.model_services` | Akane 侧 8,014 B / 242 行（**接线核对**）；行为基线 Shinku 旧侧 `companion_v01/routes/model_services.py` 16,818 B / 397 行 | **上游无对应物**；**洁净室重写** |
+| `shinku.api.model_services` | legacy 侧 8,014 B / 242 行（**接线核对**）；行为基线 Shinku 旧侧 `companion_v01/routes/model_services.py` 16,818 B / 397 行 | **上游无对应物**；**洁净室重写** |
 
 `code_shared` 里**没有路由层**——59 个上游模块里既没有 `model_services.py`，
 连 `routes/` 目录都不存在。这是规矩二十五「上游无对应物」形态的第二例
 （第一例是 C2-3 的 `providers/catalog`）。
 
-Akane 侧那份是**上一代**：只有单服务的 `GET/POST /control-center/model-service`
+legacy 侧那份是**上一代**：只有单服务的 `GET/POST /control-center/model-service`
 + `/models` + `/test`，没有多供应商面。它在本批只用于分辨「哪些是线路契约、
 哪些是项目接线」，**不拿来抄**，也**不拿来当对拍基线**。
 
@@ -16,9 +16,9 @@ Akane 侧那份是**上一代**：只有单服务的 `GET/POST /control-center/m
 
 ## 0. 本批的两个决定
 
-### 决定 1：行为基线取**旧侧真红 397 行**，不取 Akane 侧 242 行
+### 决定 1：行为基线取**旧侧真红 397 行**，不取 legacy 侧 242 行
 
-与 C2-3 `catalog` 同一处置。Akane 那份缺整个多供应商面（`/{provider_id}/config`、
+与 C2-3 `catalog` 同一处置。legacy 那份缺整个多供应商面（`/{provider_id}/config`、
 `/{provider_id}/models`、`/select`），对它做对拍等于什么都没对。
 
 ### 决定 2：**不搬那 4 个「向后兼容的单服务端点」**
@@ -32,7 +32,7 @@ older control-center builds.` 的路由，做法是把同一份能力用单服�
 | --- | --- |
 | `companion_v01/routes/model_services.py` | 它自己（旧侧） |
 | `docs/PROJECT_MAP.md` 一行 | 过时描述：把整个模块摘要成单服务那条路由 |
-| **Akane** `web/app.js`、`desktop_pet_next/src/control-center/data-sources.js` | **Akane 自己的前端**，另一个产品 |
+| **legacy** `web/app.js`、`desktop_pet_next/src/control-center/data-sources.js` | **legacy 自己的前端**，另一个产品 |
 
 **Shinku 侧零消费者**：真红自己的控制中心是 `companion_v01/routes/debug_hub.py`，
 它只用多供应商那四个端点（`GET /control-center/model-services`、`/…/config`、

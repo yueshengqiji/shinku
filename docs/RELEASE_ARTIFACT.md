@@ -6,7 +6,7 @@
 
 | 文件 | 用途 | 结果 |
 | --- | --- | --- |
-| `dist/shinku-0.1.0-source.zip` | 含源码、测试、文档和锁文件的干净源码包 | 203 个文件，审计 PASS |
+| `dist/shinku-0.1.0-source.zip` | 含源码、测试、文档和锁文件的干净源码包 | 201 个文件，审计 PASS |
 | `dist/shinku-0.1.0-py3-none-any.whl` | 只含 `shinku` runtime 包的安装包 | 85 个条目，审计 PASS |
 
 哈希不写回源码包自身，避免产生自引用；需要核对时直接执行

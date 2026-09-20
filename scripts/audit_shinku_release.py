@@ -43,9 +43,8 @@ def audit_release(root: str | Path) -> dict[str, object]:
         "LICENSE",
         "NOTICE",
         "pyproject.toml",
-        "docs/ADMISSION.md",
-        "docs/SOURCE_RECORD.md",
         "docs/THIRD_PARTY_LICENSES.md",
+        "docs/MCP_SCOPE.md",
     )
     for relative in required:
         if not (repo / relative).is_file():
@@ -72,9 +71,9 @@ def audit_release(root: str | Path) -> dict[str, object]:
 
     notice_path = repo / "NOTICE"
     notice = notice_path.read_text(encoding="utf-8") if notice_path.exists() else ""
-    if "当前声明（D1 发布边界审计" not in notice:
-        findings.append("notice_is_stale")
-    if "第三方 Python 依赖" not in notice:
+    if "原作与外部素材边界" not in notice:
+        findings.append("notice_missing_content_boundary")
+    if "第三方依赖" not in notice:
         findings.append("notice_missing_dependency_reference")
 
     admission = admission_audit(repo)

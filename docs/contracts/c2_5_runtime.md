@@ -3,7 +3,7 @@
 - 批次：C2-5a（本批）/ C2-5b（能力协商）/ C2-5c（审计与用量度量）
 - 日期：2026-09-19
 - 类型：**洁净室重写**（含逻辑 / 分支 / 算法 / 数据处理，C 阶段判据 B 类）
-- 事实来源：`AkaneCompanionLab_Shinku/companion_v01/llm_runtime.py`（98,409 B / 2,344 行）
+- 事实来源：`legacy reference tree/companion_v01/llm_runtime.py`（98,409 B / 2,344 行）
 
 ## 1. 对照物形态（规矩二十五第三例「上游无对应物」）
 
@@ -16,7 +16,7 @@
 | 上游 | 不存在 | — | — |
 | Shinku 旧侧 | `companion_v01/llm_runtime.py` | 98,409 B / 2,344 行 | **行为基线**（唯一对照物） |
 
-Akane 侧 `companion_v01/llm_runtime.py` 是 `code_shared` 兼容转发壳（同路径
+legacy 侧 `companion_v01/llm_runtime.py` 是 `code_shared` 兼容转发壳（同路径
 文件转发共享包），不构成独立证据，不参与对照。
 
 `provider_probe.py`（诊断 CLI）与本批无关：旧仓零 import、纯 dev 工具，

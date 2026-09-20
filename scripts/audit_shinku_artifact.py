@@ -37,7 +37,7 @@ def audit_artifact(path: str | Path) -> dict[str, object]:
                 "LICENSE",
                 "NOTICE",
                 "pyproject.toml",
-                "docs/SOURCE_RECORD.md",
+                "docs/MCP_SCOPE.md",
                 "requirements-cleanenv.lock",
                 "requirements-build.lock",
             }

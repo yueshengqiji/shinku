@@ -38,7 +38,7 @@ C1-2 的四个模块都**含逻辑、分支或数据处理**，因此按路径 A
 
 ### 1.1 文件切分决定（表达层，Shinku 自有）
 
-- **不沿用旧模块名。** 旧名 `request_context` / `task_artifacts` / `tool_invocation` 是 Akane 时代的
+- **不沿用旧模块名。** 旧名 `request_context` / `task_artifacts` / `tool_invocation` 是 legacy 时代的
   扁平命名；本仓库按**领域**组织：HTTP 面进 `api/`，任务产物进 `tasks/`，工具协议进 `tools/`。
 - **`api/correlation.py` 而非 `http/correlation.py`**：`api/app.py` 是应用工厂，中间件与路由都由它装配，
   放在同一层可以减少一次跨包跳转。等 HTTP 相关模块多起来再拆 `http/`。
@@ -458,14 +458,14 @@ MetricsRecorder      = Protocol: observe_request(name: str, *, duration_ms: floa
 
 ### 7.1 必须通过
 
-- [ ] 四个模块在新仓库可导入，且**不导入旧项目任何模块**（`companion_v01` / `code_shared` / `akane` 零命中）；
+- [ ] 四个模块在新仓库可导入，且**不导入旧项目任何模块**（`companion_v01` / `code_shared` / `legacy` 零命中）；
 - [ ] 本批新增文件里不出现旧项目路径字符串与旧环境变量前缀；
 - [ ] 行为测试覆盖 §2、§3、§4、§5 的每一条"必须成立的行为"；
 - [ ] **失败测试**覆盖各模块的拒绝面（畸形形状、非法输入、缺失必填字段、越界长度）；
 - [ ] `request_context` 的**异常路径**有对应用例（§2.7 最后一行）——这是旧测试的缺口；
 - [ ] 干净环境全量回归零失败（B1 38 + C1-1 30 + 本批）；
 - [ ] 旧项目源码零改动；
-- [ ] `docs/SOURCE_RECORD.md` 按 §5.9 分别登记「契约事实来源」与「表达层撰写情况」。
+- [ ] 本批契约与实现边界已在公开契约文档中登记。
 
 ### 7.2 测试时必须避开的假通过
 

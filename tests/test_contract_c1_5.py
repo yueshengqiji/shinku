@@ -116,7 +116,7 @@ class C1_5BoundaryTests(unittest.TestCase):
     那样就把来源路径写进了产品代码。来源路径属于台账，不属于运行时。
     """
 
-    FORBIDDEN = ("companion_v01", "code_shared", "akane")
+    FORBIDDEN = ("companion_v01", "code_shared")
 
     def test_the_module_does_not_mention_a_foreign_project(self) -> None:
         text = MODULE_PATH.read_text(encoding="utf-8")

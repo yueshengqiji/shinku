@@ -1,9 +1,6 @@
-"""Shinku 独立实现。
+"""Shinku 独立运行时包。
 
-本仓库是洁净室重建产物：它**不包含** AkaneCompanionLab 的任何源码、文档或素材。
-业务模块在 C 阶段逐个重写后加入；加入时更新 ``NOTICE`` 与 ``docs/SOURCE_RECORD.md``。
-
-当前（B1）仓库里只有骨架：命名契约、配置加载、后端应用工厂和命令行入口。
+本包提供本地优先的记忆、上下文、模型和 Agent 运行时能力；角色资料与外部素材由使用者自行管理。
 """
 
 from __future__ import annotations
