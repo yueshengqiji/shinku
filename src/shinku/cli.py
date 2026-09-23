@@ -18,6 +18,7 @@ import argparse
 import os
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__
@@ -28,8 +29,11 @@ from .qq.host import NapCatHost
 from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
 from .qq.assembly import QQAgentConfigError, assemble_qq_agent, load_qq_agent_config
 from .qq.turns import NapCatTurnDispatcher
+from .qq.welcome import GroupWelcomePolicy
 from .persona import PersonaLoadError, load_persona
+from .providers.catalog import ModelServiceConfigStore
 from .tools.execution import ExecutionPolicy
+from .supervisor import ShinkuSupervisor, SupervisorConfig
 
 IMPLEMENTED_SERVICES = ("backend",)
 
@@ -134,13 +138,47 @@ def _cmd_serve(service: str) -> int:
     import uvicorn
 
     from .api import create_app
+    from .api.model_runtime import RuntimeModelServiceConfig, RuntimeModelServiceController
 
     napcat_config = NapCatConnectionConfig.from_env()
     agent_config = load_qq_agent_config()
-    if agent_config.memory_enabled and not agent_config.memory_db_path:
+    model_service_path = os.environ.get("SHINKU_MODEL_SERVICES_PATH", "").strip()
+    model_service_store = ModelServiceConfigStore(
+        Path(model_service_path)
+        if model_service_path
+        else settings.data_root / "model_services.json",
+        environ=os.environ,
+    )
+    model_service_config = RuntimeModelServiceConfig.from_agent_config(agent_config)
+    model_service_controller = RuntimeModelServiceController(
+        store=model_service_store,
+        config_module=model_service_config,
+    )
+    # 已保存的激活项优先于启动环境；没有注册表时保持现有配置不变。
+    model_service_controller.load_saved()
+    agent_config = load_qq_agent_config()
+    if (
+        (agent_config.memory_enabled and not agent_config.memory_db_path)
+        or not agent_config.command_state_path
+        or not agent_config.agent_task_store_path
+    ):
         agent_config = replace(
             agent_config,
-            memory_db_path=str(settings.data_root / "memory" / "shinku_memory.sqlite3"),
+            **(
+                {"memory_db_path": str(settings.data_root / "memory" / "shinku_memory.sqlite3")}
+                if agent_config.memory_enabled and not agent_config.memory_db_path
+                else {}
+            ),
+            **(
+                {"command_state_path": str(settings.data_root / "qq" / "command_state.json")}
+                if not agent_config.command_state_path
+                else {}
+            ),
+            **(
+                {"agent_task_store_path": str(settings.data_root / "runtime" / "agent_tasks.sqlite3")}
+                if not agent_config.agent_task_store_path
+                else {}
+            ),
         )
     if agent_config.enabled and not napcat_config.webhook_enabled:
         print(
@@ -149,6 +187,7 @@ def _cmd_serve(service: str) -> int:
         )
         return 2
     napcat_host = None
+    assembly = None
     if napcat_config.webhook_enabled:
         errors = napcat_config.validate()
         if errors:
@@ -159,14 +198,28 @@ def _cmd_serve(service: str) -> int:
             visual_bridge=NapCatVisualInputBridge(
                 materialize=NapCatImageMaterializer(allowed_roots=napcat_config.image_roots)
             ),
+            # Welcome is an external side effect. It is available only when
+            # the QQ Agent is explicitly allowed to send; dry-run never sends.
+            welcome_policy=(
+                GroupWelcomePolicy.from_environment()
+                if agent_config.send_enabled
+                else GroupWelcomePolicy()
+            ),
         )
         if agent_config.enabled:
             try:
                 sender = napcat_host.send if agent_config.send_enabled else None
                 assembly = assemble_qq_agent(agent_config, sender=sender)
+                model_service_controller.attach_runtime(assembly.bridge.runtime)
             except (QQAgentConfigError, ValueError) as exc:
                 print(f"invalid enabled QQ Agent configuration: {exc}", file=sys.stderr)
                 return 2
+            # Memory observes every normalized group message before the reply
+            # route decides whether this turn is addressed to Shinku.
+            napcat_host.set_passive_observer(assembly.bridge.observe_message)
+            # Command switches are live: /at reply and /stop must affect the
+            # ingress gate without rebuilding the FastAPI app.
+            napcat_host.ingress.set_command_state(assembly.bridge.command_state)
             dispatcher = NapCatTurnDispatcher(
                 handler=assembly.bridge,
                 flush_batch=napcat_host.flush,
@@ -178,6 +231,9 @@ def _cmd_serve(service: str) -> int:
         napcat_host=napcat_host,
         napcat_webhook_path=napcat_config.webhook_path,
         napcat_event_token=napcat_config.event_token,
+        qq_agent_assembly=assembly,
+        napcat_config=napcat_config,
+        model_services_controller=model_service_controller,
     )
     uvicorn.run(
         app,
@@ -186,6 +242,28 @@ def _cmd_serve(service: str) -> int:
         log_level="info",
     )
     return 0
+
+
+def _cmd_supervise(
+    service: str,
+    *,
+    max_restarts: int,
+    health_interval: float,
+    startup_timeout: float,
+    restart_backoff: float,
+) -> int:
+    """启动并只监督本命令创建的一个后端子进程。"""
+
+    settings = load_settings()
+    ensure_directories(settings)
+    config = SupervisorConfig(
+        service=service,
+        max_restarts=max_restarts,
+        health_interval_seconds=health_interval,
+        startup_timeout_seconds=startup_timeout,
+        restart_backoff_seconds=restart_backoff,
+    )
+    return ShinkuSupervisor(config, settings=settings).run()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,6 +275,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = sub.add_parser("serve", help="启动一个服务")
     serve.add_argument("--service", dest="service", default="backend", choices=names.SERVICE_NAMES)
+
+    supervise = sub.add_parser(
+        "supervise",
+        help="启动并监督本命令创建的后端子进程（不扫描或杀其他进程）",
+    )
+    supervise.add_argument("--service", dest="service", default="backend", choices=("backend",))
+    supervise.add_argument("--max-restarts", type=int, default=3)
+    supervise.add_argument("--health-interval", type=float, default=5.0)
+    supervise.add_argument("--startup-timeout", type=float, default=30.0)
+    supervise.add_argument("--restart-backoff", type=float, default=2.0)
     return parser
 
 
@@ -209,6 +297,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_doctor()
     if args.command == "serve":
         return _cmd_serve(args.service)
+    if args.command == "supervise":
+        return _cmd_supervise(
+            args.service,
+            max_restarts=args.max_restarts,
+            health_interval=args.health_interval,
+            startup_timeout=args.startup_timeout,
+            restart_backoff=args.restart_backoff,
+        )
 
     parser.error(f"unknown command: {args.command}")
     return 2

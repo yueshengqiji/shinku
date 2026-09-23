@@ -91,6 +91,33 @@ class AttentionBatcherTests(unittest.TestCase):
         assert batch is not None
         self.assertEqual(batch.primary_message.message_id, "m-1")
 
+    def test_poke_is_not_merged_with_nearby_dialogue(self) -> None:
+        router = ReplyRoutePolicy(bot_ids=frozenset({"bot-1"}))
+        policy = AttentionPolicy()
+        batcher = AttentionBatcher(window_seconds=2.0)
+        poke = IncomingMessage.from_event(
+            {
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "u-2",
+                "target_id": "bot-1",
+                "self_id": "bot-1",
+            }
+        )
+        text = _message("m-4", "真红，接着说", conversation_id="g-1")
+        poke_decision = policy.evaluate(poke, router.decide(poke))
+        text_decision = policy.evaluate(text, router.decide(text))
+        self.assertIsNone(batcher.push(poke, poke_decision, at=1.0))
+        closed = batcher.push(text, text_decision, at=1.2)
+        self.assertIsNotNone(closed)
+        assert closed is not None
+        self.assertEqual(closed.messages[0].message_id, poke.message_id)
+        next_batch = batcher.flush()
+        self.assertIsNotNone(next_batch)
+        assert next_batch is not None
+        self.assertEqual(next_batch.messages[0].message_id, "m-4")
+
 
 if __name__ == "__main__":
     unittest.main()

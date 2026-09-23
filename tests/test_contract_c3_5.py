@@ -26,6 +26,25 @@ class LLMPlannerTests(unittest.TestCase):
         self.assertEqual(runtime.calls[0]["native_tool_choice"], "auto")
         self.assertEqual(runtime.calls[0]["prompt_cache_key"], "agent:v1")
 
+    def test_voice_segments_are_accepted_as_an_agent_final_reply(self) -> None:
+        runtime = FakeRuntime(
+            {
+                "status": "reply",
+                "speech_segments": ["第一句。", {"speech": "第二句。"}],
+            }
+        )
+        planner = LLMPlanner(runtime=runtime, system_prompt="persona")
+        decision = planner(state=AgentState())
+        assert decision is not None
+        self.assertEqual((decision.kind, decision.text), ("final", "第一句。\n第二句。"))
+
+    def test_speech_segments_without_status_are_accepted(self) -> None:
+        runtime = FakeRuntime({"speech_segments": ["收到。"]})
+        planner = LLMPlanner(runtime=runtime, system_prompt="persona")
+        decision = planner(state=AgentState())
+        assert decision is not None
+        self.assertEqual((decision.kind, decision.text), ("final", "收到。"))
+
     def test_legacy_tool_call_with_json_arguments_is_parsed(self) -> None:
         runtime = FakeRuntime({"tool_call": {"type": "search", "arguments": '{"query":"x"}', "id": "call-1"}})
         decision = LLMPlanner(runtime=runtime, system_prompt="p")(state=AgentState())

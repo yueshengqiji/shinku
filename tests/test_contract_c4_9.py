@@ -51,6 +51,15 @@ class NapCatImageMaterializerTests(unittest.TestCase):
             result = materializer({"kind": "image", "local_path": path.as_uri()})
             self.assertTrue(result.startswith("data:image/png;base64,"))
 
+    def test_windows_file_url_in_url_field_is_materialized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "photo.png"
+            path.write_bytes(b"local-image")
+            windows_file_url = "file://" + str(path)
+            materializer = NapCatImageMaterializer(allowed_roots=(temp_dir,))
+            result = materializer({"kind": "image", "url": windows_file_url})
+            self.assertTrue(result.startswith("data:image/png;base64,"))
+
     def test_disallowed_local_file_stays_unresolved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as allowed_dir:
             path = Path(temp_dir) / "photo.png"

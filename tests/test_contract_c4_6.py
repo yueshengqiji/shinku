@@ -43,6 +43,19 @@ class NapCatAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             NapCatEventAdapter().normalize({"post_type": "notice"})
 
+    def test_poke_notice_is_a_supported_non_message_event(self) -> None:
+        message = NapCatEventAdapter().normalize(
+            {
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "u-2",
+                "target_id": "bot-1",
+                "self_id": "bot-1",
+            }
+        )
+        self.assertTrue(message.is_poke)
+
     def test_message_event_keeps_original_image_segment(self) -> None:
         message = NapCatEventAdapter().normalize(
             {

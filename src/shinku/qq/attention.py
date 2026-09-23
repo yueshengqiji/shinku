@@ -38,11 +38,30 @@ class AttentionPolicy:
     autonomous_enabled: bool = False
     autonomous_probability: float = 0.0
     random_source: Callable[[], float] = random.random
+    autonomous_enabled_getter: Callable[[], bool] | None = None
+    response_enabled_getter: Callable[[], bool] | None = None
 
     def evaluate(self, message: IncomingMessage, route: RouteDecision) -> AttentionDecision:
+        # Commands are the control plane and must remain available while
+        # normal replies are paused.  /start is therefore able to recover a
+        # stopped instance without requiring a second hidden route.
+        if route.reason == "slash_command":
+            return AttentionDecision(True, True, route.priority, route.reason)
+        if self.response_enabled_getter is not None:
+            try:
+                if not bool(self.response_enabled_getter()):
+                    return AttentionDecision(False, False, 0, "responses_disabled_by_command")
+            except Exception:
+                return AttentionDecision(False, False, 0, "responses_disabled_by_command")
         if route.should_reply:
             return AttentionDecision(True, True, route.priority, route.reason)
-        if not self.autonomous_enabled:
+        autonomous_enabled = self.autonomous_enabled
+        if self.autonomous_enabled_getter is not None:
+            try:
+                autonomous_enabled = bool(self.autonomous_enabled_getter())
+            except Exception:
+                autonomous_enabled = False
+        if not autonomous_enabled:
             return AttentionDecision(False, False, 0, "autonomous_reply_disabled")
         if not message.text.strip() and not message.has_media:
             return AttentionDecision(False, False, 0, "empty_message")
@@ -115,6 +134,24 @@ class AttentionBatcher:
         if not decision.should_schedule:
             return None
         closed: AttentionBatch | None = None
+        # Control messages are never merged with conversational turns.  A
+        # command may arrive immediately after an @ message (or vice versa);
+        # keeping the slash boundary intact is more important than the short
+        # conversational batching window.
+        if self._messages and (
+            decision.reason == "slash_command"
+            or self._decisions[-1].reason == "slash_command"
+        ):
+            closed = self.flush()
+        # Pokes are transient notices, not dialogue content.  Keep them out
+        # of the same short-window turn as a nearby text message (and do not
+        # collapse two pokes into one reply), otherwise a later message can
+        # inherit the poke's lightweight/no-memory semantics.
+        if self._messages and (
+            bool(getattr(message, "is_poke", False))
+            or any(bool(getattr(item, "is_poke", False)) for item in self._messages)
+        ):
+            closed = self.flush()
         if self._messages and (
             message.conversation_id != self._conversation_id
             or self._last_at is None

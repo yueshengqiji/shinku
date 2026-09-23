@@ -44,6 +44,23 @@ class NapCatWebhookTests(unittest.TestCase):
         notice = {"post_type": "notice", "notice_type": "group_upload"}
         self.assertEqual(client.post("/events/napcat", content=json.dumps(notice)).status_code, 400)
 
+    def test_webhook_accepts_poke_notice(self) -> None:
+        app = FastAPI()
+        app.include_router(create_napcat_webhook_router(NapCatHost()))
+        response = TestClient(app).post(
+            "/events/napcat",
+            json={
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "u-2",
+                "target_id": "bot-1",
+                "self_id": "bot-1",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["scheduled"])
+
     def test_router_rejects_bad_path_configuration(self) -> None:
         with self.assertRaises(ValueError):
             create_napcat_webhook_router(NapCatHost(), path="events/napcat")

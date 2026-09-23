@@ -43,12 +43,63 @@ class MessageBoundaryTests(unittest.TestCase):
         self.assertEqual(message.attachments[0]["local_path"], "C:/tmp/a.txt")
         self.assertEqual(message.as_dict()["segments"][0]["payload"]["data"]["id"], "quoted-1")
 
+    def test_onebot_private_event_uses_user_id_as_conversation_id(self) -> None:
+        message = IncomingMessage.from_event(
+            {
+                "post_type": "message",
+                "message_type": "private",
+                "user_id": "u-private-1",
+                "sender": {"user_id": "u-private-1"},
+                "message_id": "m-private-1",
+                "message": [{"type": "text", "data": {"text": "你好"}}],
+            }
+        )
+        self.assertEqual(message.sender_id, "u-private-1")
+        self.assertEqual(message.conversation_id, "u-private-1")
+        self.assertEqual(message.conversation_type, "private")
+
     def test_plain_text_event_has_no_fake_attachment(self) -> None:
         message = IncomingMessage.from_event({"raw_message": "你好", "time": "12.5"})
         self.assertEqual(message.text, "你好")
         self.assertFalse(message.has_media)
         self.assertEqual(message.timestamp, 12.5)
         self.assertEqual(message.segments, (MessageSegment(kind="text", text="你好"),))
+
+    def test_inline_qq_image_markup_becomes_a_real_attachment(self) -> None:
+        message = IncomingMessage.from_event(
+            {
+                "raw_message": r'<img src="file://C:\\Users\\as233\\photo.png" />你看这是谁',
+            }
+        )
+        self.assertEqual(message.text, "你看这是谁")
+        self.assertTrue(message.has_media)
+        self.assertEqual(message.attachments[0]["url"], r"file://C:\\Users\\as233\\photo.png")
+
+    def test_cq_image_markup_is_not_collapsed_into_plain_text(self) -> None:
+        message = IncomingMessage.from_event(
+            {"raw_message": "[CQ:image,file=img-7,url=https://img.test/a.png]看看"}
+        )
+        self.assertEqual(message.text, "看看")
+        self.assertEqual(message.attachments[0]["media_id"], "img-7")
+        self.assertEqual(message.attachments[0]["url"], "https://img.test/a.png")
+
+    def test_poke_notice_becomes_a_transient_poke_event(self) -> None:
+        message = IncomingMessage.from_event(
+            {
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "u-2",
+                "target_id": "bot-1",
+                "self_id": "bot-1",
+                "sender": {"user_id": "u-2", "nickname": "测试者"},
+                "time": 12.5,
+            }
+        )
+        self.assertTrue(message.is_poke)
+        self.assertEqual((message.event_kind, message.sender_id, message.conversation_id), ("poke", "u-2", "g-1"))
+        self.assertEqual(message.text, "[QQ戳一戳]")
+        self.assertFalse(message.has_media)
 
 
 if __name__ == "__main__":

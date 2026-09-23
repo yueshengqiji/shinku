@@ -8,12 +8,15 @@
 
 ## 契约
 
-- 入站只接受 `post_type=message`，再交给 `IncomingMessage.from_event()`；
+- 入站接受 `post_type=message`，以及明确支持的 `notice/notify` 戳一戳事件，再交给
+  `IncomingMessage.from_event()`；其他 notice 不得伪装成聊天消息；
 - 群聊出站使用 `send_group_msg` + `group_id`；
 - 私聊出站使用 `send_private_msg` + `user_id`；
 - 引用、文本和图片保持同一个 `message` segment 列表；
 - OneBot 错误统一转换为 `DeliveryResult` 的 rejected 状态；
 - `NapCatActionTransport` 只调用注入的 `action_call`，不自己建立网络连接。
+- 戳一戳只保留为瞬时 `event_kind=poke`，由路由判断 `target_id` 是否为当前机器人，
+  不进入普通聊天记忆。
 
 ## 灰度口径
 

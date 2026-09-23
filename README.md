@@ -4,6 +4,10 @@
 
 Shinku 的重点不是某个具体角色，而是把长期记忆、短期事件、上下文裁剪、工具授权和模型调用组织成可替换的运行时框架。它可以作为本地助手、聊天机器人或其他 Agent 应用的后端基础。
 
+本仓库是公共核心发行版。个人角色资料、声线/台词/媒体资产以及本机专用工具通过仓库外的
+运行时扩展注入，不随公共源码和发行包发布；私用启动器应把扩展目录加入 `PYTHONPATH`，并显式设置
+`SHINKU_RUNTIME_EXTENSION_MODULE`。
+
 ## 设计重点
 
 ### 记忆不是每轮全量注入
@@ -83,11 +87,26 @@ shinku doctor
 shinku serve --service backend
 ```
 
+需要由独立版自己托管后端生命周期时，可使用有限重启的监督器。它只管理自己创建的子进程，
+不会扫描或按名称终止其他程序：
+
+```powershell
+shinku supervise --service backend
+```
+
 健康检查：
 
 ```text
 http://127.0.0.1:9998/health
 ```
+
+本机控制中枢：
+
+```text
+http://127.0.0.1:9998/debug/hub
+```
+
+控制中枢前端资源位于 `frontend/control-center/`，只允许本机访问；模型密钥不会在状态接口中回显。
 
 供应方、模型和环境变量示例见 [`.env.example`](.env.example)。不要把真实 API key、Cookie、聊天记录或运行期 `data/` 提交到 Git。
 

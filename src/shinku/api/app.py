@@ -6,8 +6,8 @@
 不用改环境变量、不用碰真实数据根。C 阶段加入依赖注入（引擎、锚点服务）时，
 注入点就在这里，不需要改调用方。
 
-B1 只提供 ``/health`` 与 ``/health/ready``。它们的作用不是"看起来像个服务"，
-而是**证明新树能在没有旧项目的情况下起来**：
+B1 先提供 ``/health`` 与 ``/health/ready``；当前后端还挂载本机控制中枢和 QQ Webhook。
+健康端点的作用不是"看起来像个服务"，而是**证明新树能在没有旧项目的情况下起来**：
 进程能装、能启动、能回答问题、能报告自己解析到的是哪套配置。
 """
 
@@ -22,6 +22,13 @@ from .. import __version__
 from .. import names
 from ..config import Settings, load_settings
 from ..health import build_basic_health_payload
+from .debug_hub import build_debug_hub_router
+from .agent_work import build_agent_work_router
+from .observability import build_observability_router
+from .qq_diagnostics import build_qq_diagnostics_router
+from .memory_admin import build_memory_admin_router
+from .capabilities import build_capabilities_router
+from .model_services import build_model_services_router
 from ..qq.host import NapCatHost
 from ..qq.webhook import create_napcat_webhook_router
 
@@ -53,6 +60,10 @@ def create_app(
     napcat_host: NapCatHost | None = None,
     napcat_webhook_path: str = "/events/napcat",
     napcat_event_token: str = "",
+    qq_agent_assembly: object | None = None,
+    napcat_config: object | None = None,
+    model_services_controller: object | None = None,
+    agent_task_coordinator: object | None = None,
 ) -> FastAPI:
     resolved = settings or load_settings()
 
@@ -66,6 +77,39 @@ def create_app(
         openapi_url=None,
     )
     app.state.settings = resolved
+    app.include_router(build_observability_router(settings=resolved, assembly=qq_agent_assembly))
+    app.include_router(build_qq_diagnostics_router(napcat_host=napcat_host, napcat_config=napcat_config))
+    # 控制中枢的状态面和写操作都只允许本机请求；模型服务路由另外再做一次来源校验。
+    app.include_router(
+        build_debug_hub_router(
+            settings=resolved,
+            assembly=qq_agent_assembly,
+            napcat_host=napcat_host,
+            napcat_config=napcat_config,
+            model_services_controller=model_services_controller,
+        )
+    )
+    if model_services_controller is not None:
+        store = getattr(model_services_controller, "store", None)
+        config_module = getattr(model_services_controller, "config_module", None)
+        if store is not None and config_module is not None:
+            app.state.model_services_controller = model_services_controller
+            app.include_router(
+                build_model_services_router(
+                    store=store,
+                    config_module=config_module,
+                    engine=model_services_controller,
+                )
+            )
+    coordinator = agent_task_coordinator or getattr(qq_agent_assembly, "task_coordinator", None)
+    if coordinator is not None:
+        app.include_router(build_agent_work_router(coordinator))
+    if qq_agent_assembly is not None:
+        bridge = getattr(qq_agent_assembly, "bridge", None)
+        memory_service = getattr(bridge, "memory_service", None)
+        if memory_service is not None:
+            app.include_router(build_memory_admin_router(memory_service))
+        app.include_router(build_capabilities_router(qq_agent_assembly))
     if napcat_host is not None:
         app.state.napcat_host = napcat_host
         app.include_router(

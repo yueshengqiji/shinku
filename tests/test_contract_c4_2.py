@@ -62,6 +62,34 @@ class ReplyRoutingTests(unittest.TestCase):
         decision = self.policy.decide(_message({"type": "at", "data": {"qq": "user-2"}}))
         self.assertFalse(decision.should_reply)
 
+    def test_poke_targeting_bot_enters_agent(self) -> None:
+        message = IncomingMessage.from_event(
+            {
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "user-2",
+                "target_id": "bot-1",
+                "self_id": "bot-1",
+            }
+        )
+        decision = self.policy.decide(message)
+        self.assertEqual((decision.should_reply, decision.reason, decision.priority), (True, "qq_poke", 95))
+
+    def test_poke_targeting_someone_else_stays_out(self) -> None:
+        message = IncomingMessage.from_event(
+            {
+                "post_type": "notice",
+                "notice_type": "group_poke",
+                "group_id": "g-1",
+                "user_id": "user-2",
+                "target_id": "user-3",
+                "self_id": "bot-1",
+            }
+        )
+        decision = self.policy.decide(message)
+        self.assertEqual((decision.should_reply, decision.reason), (False, "poke_not_for_bot"))
+
     def test_route_names_and_switches_can_come_from_environment(self) -> None:
         policy = ReplyRoutePolicy.from_environment(
             {

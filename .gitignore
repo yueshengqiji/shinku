@@ -22,5 +22,8 @@ logs/
 users_data/
 data/
 
+# 私用扩展、角色资料、媒体和高危宿主不进入公共仓库或发行包。
+private/
+
 .env
 .env.local

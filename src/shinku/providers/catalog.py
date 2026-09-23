@@ -496,7 +496,21 @@ def _sync_native_tool_policy(config_module: Any, settings: ModelServiceSettings)
         return
     presets = getattr(config_module, "MODEL_PRESETS", {})
     preset = presets.get(settings.provider_id) if isinstance(presets, dict) else None
-    native_tools = bool(isinstance(preset, dict) and preset.get("native_tools"))
+    custom_preset = None
+    if not isinstance(preset, dict) and settings.provider_id not in PRESET_BY_ID:
+        custom_preset = next(
+            (
+                item
+                for item in _configured_provider_presets()
+                if item.id == settings.provider_id
+            ),
+            None,
+        )
+    native_tools = (
+        bool(preset.get("native_tools"))
+        if isinstance(preset, dict)
+        else bool(custom_preset and "native_tools" in custom_preset.capabilities)
+    )
     setattr(config_module, "ENABLE_NATIVE_TOOL_DECISION", native_tools)
     if not native_tools:
         if hasattr(config_module, "NATIVE_TOOL_PROVIDER_ALLOWLIST"):

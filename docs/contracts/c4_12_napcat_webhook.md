@@ -10,7 +10,8 @@
 - `create_napcat_webhook_router()` 只返回 router，不创建 app、不监听端口；
 - `POST /events/napcat` 默认接收 JSON body，交给 `NapCatHost.handle_event()`；
 - 可选 `event_token` 使用 `Authorization: Bearer ...` 校验，token 不回显；
-- 非法 JSON、非对象 JSON 和非 message 事件返回统一 400，不暴露内部异常；
+- 非法 JSON、非对象 JSON 和未支持的非 message 事件返回统一 400，不暴露内部异常；
+  支持的戳一戳 notice/notify 事件按正常入站事件返回调度摘要；
 - 成功响应只返回 scheduled、visual_ready、visual_pending 摘要，不回显消息正文或图片引用；
 - 出站消息仍由 `NapCatHost.send()` 处理，本路由不自动回复。
 

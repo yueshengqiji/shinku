@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOTS = (
     "src",
+    "frontend",
     "scripts",
     "tests",
     "docs",

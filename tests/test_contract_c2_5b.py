@@ -101,6 +101,18 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(profile.force_response_json)
         self.assertTrue(runtime.chat_supports_native_tools())
 
+    def test_verified_pinaic_gemini_profile_enables_native_tools(self) -> None:
+        runtime = _runtime(
+            base_url="https://api.pinaic.com/v1",
+            model="gemini-2.5-pro",
+        )
+        profile = runtime._tool_profile(runtime.chat)
+        self.assertTrue(profile.supports_native_tools)
+        self.assertTrue(profile.verified)
+        self.assertFalse(profile.native_tools_coexist_with_forced_json)
+        self.assertFalse(profile.force_response_json)
+        self.assertTrue(runtime.chat_supports_native_tools())
+
     def test_allowlist_can_enable_json_coexistence(self) -> None:
         runtime = _runtime(base_url="https://gateway.example/v1", model="custom")
         with mock.patch.dict(

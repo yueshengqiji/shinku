@@ -8,20 +8,29 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from shinku.agent.planner import ChatRuntime, PromptBuilder
 from shinku.agent.pending import JsonPendingApprovalStore
 from shinku.agent.loop import AGENT_MAX_ROUNDS_HARD_LIMIT
+from shinku.agent.self_state import SelfStateTool
+from shinku.agent.change_awareness import RuntimeChangeTracker
 from shinku.hosts.tool_host import ToolHost
 from shinku.llm.runtime import LLMRuntime
-from shinku.memory import LLMMemoryJudge, MemoryPolicy, MemoryRouter, MemoryService, MemoryStore
+from shinku.memory import LLMMemoryJudge, MemoryPolicy, MemoryRouter, MemorySearchTool, MemoryService, MemoryStore
+from shinku.memory.embedding_factory import build_embedding_provider
 from shinku.persona import PersonaDocument, load_persona
+from shinku.extensions import RuntimeExtension, RuntimeExtensionError, load_runtime_extension
 from shinku.tools.execution import ExecutionPolicy
+from shinku.tools.registry import ToolRegistry
+from shinku.tasks.coordinator import AgentTaskCoordinator
 
 from .agent_bridge import QQAgentBridge, QQMessageSender
+from .chat_flow import ChatFlowController
+from .commands import QQCommandState
+from .reply_host import ReplyHost
 
 __all__ = [
     "QQAgentConfig",
@@ -39,8 +48,26 @@ def _flag(value: object, *, default: bool = False) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _csv_values(value: object) -> tuple[str, ...]:
+    return tuple(
+        item.strip()
+        for item in str(value or "").replace("，", ",").split(",")
+        if item.strip()
+    )
+
+
 class QQAgentConfigError(ValueError):
     """QQ Agent 被显式启用但配置不完整时抛出。"""
+
+
+def _validate_private_owner_gate(
+    extension: RuntimeExtension | None,
+    owner_ids: Sequence[str],
+) -> None:
+    """A private extension must never start without a configured owner."""
+
+    if extension is not None and not any(str(item or "").strip() for item in owner_ids):
+        raise QQAgentConfigError("private_master_user_ids_missing")
 
 
 @dataclass(frozen=True)
@@ -63,6 +90,16 @@ class QQAgentConfig:
     memory_enabled: bool = True
     memory_db_path: str = ""
     memory_judge_enabled: bool = True
+    reply_host_enabled: bool = True
+    reply_long_trigger_chars: int = 360
+    reply_max_segment_chars: int = 600
+    reply_short_max_segments: int = 2
+    reply_long_max_segments: int = 4
+    reply_segment_delay_seconds: float = 0.0
+    reply_strip_final_periods: bool = True
+    command_state_path: str = ""
+    agent_task_store_path: str = ""
+    runtime_extension_module: str = ""
 
     def diagnostics(self) -> dict[str, object]:
         """返回安全配置快照，绝不返回 key 内容。"""
@@ -86,6 +123,16 @@ class QQAgentConfig:
             "memory_enabled": self.memory_enabled,
             "memory_db_path": self.memory_db_path or "(default data root)",
             "memory_judge_enabled": self.memory_judge_enabled,
+            "reply_host_enabled": self.reply_host_enabled,
+            "reply_long_trigger_chars": self.reply_long_trigger_chars,
+            "reply_max_segment_chars": self.reply_max_segment_chars,
+            "reply_short_max_segments": self.reply_short_max_segments,
+            "reply_long_max_segments": self.reply_long_max_segments,
+            "reply_segment_delay_seconds": self.reply_segment_delay_seconds,
+            "reply_strip_final_periods": self.reply_strip_final_periods,
+            "command_state_path": self.command_state_path or "(memory)",
+            "agent_task_store_path": self.agent_task_store_path or "(memory)",
+            "runtime_extension_module": self.runtime_extension_module or "(none)",
         }
 
     def validation_errors(self) -> tuple[str, ...]:
@@ -145,6 +192,35 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         approval_ttl_seconds = float(raw_ttl)
     except ValueError:
         approval_ttl_seconds = 300.0
+    raw_reply_trigger = str(env.get("SHINKU_QQ_REPLY_LONG_TRIGGER_CHARS", "360") or "360").strip()
+    try:
+        reply_long_trigger_chars = int(raw_reply_trigger)
+    except ValueError:
+        reply_long_trigger_chars = 360
+    raw_reply_max_chars = str(env.get("SHINKU_QQ_REPLY_MAX_SEGMENT_CHARS", "600") or "600").strip()
+    try:
+        reply_max_segment_chars = int(raw_reply_max_chars)
+    except ValueError:
+        reply_max_segment_chars = 600
+    raw_reply_short_max = str(env.get("SHINKU_QQ_REPLY_SHORT_MAX_SEGMENTS", "2") or "2").strip()
+    try:
+        reply_short_max_segments = int(raw_reply_short_max)
+    except ValueError:
+        reply_short_max_segments = 2
+    raw_reply_long_max = str(env.get("SHINKU_QQ_REPLY_LONG_MAX_SEGMENTS", "4") or "4").strip()
+    try:
+        reply_long_max_segments = int(raw_reply_long_max)
+    except ValueError:
+        reply_long_max_segments = 4
+    raw_reply_delay = str(env.get("SHINKU_QQ_REPLY_SEGMENT_DELAY_SECONDS", "0") or "0").strip()
+    try:
+        reply_segment_delay_seconds = float(raw_reply_delay)
+    except ValueError:
+        reply_segment_delay_seconds = 0.0
+    reply_strip_final_periods = _flag(
+        env.get("SHINKU_QQ_REPLY_STRIP_FINAL_PERIODS", "true"),
+        default=True,
+    )
     return QQAgentConfig(
         enabled=_flag(env.get("SHINKU_QQ_AGENT_ENABLED")),
         send_enabled=_flag(env.get("SHINKU_QQ_AGENT_SEND_ENABLED")),
@@ -164,6 +240,16 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         memory_enabled=_flag(env.get("SHINKU_MEMORY_ENABLED", "true"), default=True),
         memory_db_path=str(env.get("SHINKU_MEMORY_DB_PATH", "") or "").strip(),
         memory_judge_enabled=_flag(env.get("SHINKU_MEMORY_JUDGE_ENABLED", "true"), default=True),
+        reply_host_enabled=_flag(env.get("SHINKU_QQ_REPLY_HOST_ENABLED", "true"), default=True),
+        reply_long_trigger_chars=reply_long_trigger_chars,
+        reply_max_segment_chars=reply_max_segment_chars,
+        reply_short_max_segments=reply_short_max_segments,
+        reply_long_max_segments=reply_long_max_segments,
+        reply_segment_delay_seconds=max(0.0, min(10.0, reply_segment_delay_seconds)),
+        reply_strip_final_periods=reply_strip_final_periods,
+        command_state_path=str(env.get("SHINKU_QQ_COMMAND_STATE_PATH", "") or "").strip(),
+        agent_task_store_path=str(env.get("SHINKU_QQ_AGENT_TASKS_DB_PATH", "") or "").strip(),
+        runtime_extension_module=str(env.get("SHINKU_RUNTIME_EXTENSION_MODULE", "") or "").strip(),
     )
 
 
@@ -172,12 +258,50 @@ class QQAgentAssembly:
     config: QQAgentConfig
     persona: PersonaDocument
     bridge: QQAgentBridge
+    task_coordinator: AgentTaskCoordinator
+    extension: RuntimeExtension | None = None
+    change_tracker: RuntimeChangeTracker | None = None
 
     def diagnostics(self) -> dict[str, object]:
+        memory_service = getattr(self.bridge, "memory_service", None)
+        memory_store = getattr(memory_service, "store", None)
+        registered_tools = ()
+        tool_host = getattr(self.bridge, "tool_host", None)
+        registry = getattr(tool_host, "registry", None)
+        names_getter = getattr(registry, "names", None)
+        if callable(names_getter):
+            try:
+                registered_tools = names_getter()
+            except Exception:
+                registered_tools = ()
         return {
             "config": self.config.diagnostics(),
             "persona": self.persona.diagnostics(),
             "sender_mode": "enabled" if self.bridge.sender is not None else "dry_run",
+            "chat_flow": self.bridge.chat_flow.diagnostics(),
+            "task_coordinator": {
+                "enabled": True,
+                "tasks": len(self.task_coordinator.list()),
+                **self.task_coordinator.storage_status(),
+            },
+            "runtime_extension": self.extension.diagnostics() if self.extension is not None else {"configured": False},
+            "memory_semantic": memory_store.semantic_status() if memory_store is not None else {"enabled": False},
+            "memory_owner": memory_service.owner_status() if memory_service is not None else {"enabled": False},
+            "changes": (
+                self.change_tracker.diagnostics(registered_tools=registered_tools)
+                if self.change_tracker is not None
+                else {"enabled": False, "status": "not_attached"}
+            ),
+            "owner_tool_gate": {
+                "enabled": bool(getattr(self.bridge, "master_user_ids", ())),
+                "configured_master_count": len(getattr(self.bridge, "master_user_ids", ())),
+            },
+            "command_auth": {
+                "owner_required": bool(
+                    getattr(getattr(self.bridge, "command_interpreter", None), "require_owner", False)
+                ),
+                "configured_owner_count": len(getattr(getattr(self.bridge, "command_state", None), "owner_ids", ())),
+            },
         }
 
 
@@ -204,17 +328,35 @@ def assemble_qq_agent(
     if runtime is None:
         metrics = Path(config.metrics_path) if config.metrics_path else None
         runtime = LLMRuntime(metrics_path=metrics)
+    memory_policy = MemoryPolicy.from_environment()
+    try:
+        extension = load_runtime_extension(config.runtime_extension_module)
+    except RuntimeExtensionError as exc:
+        raise QQAgentConfigError(str(exc)) from exc
+    _validate_private_owner_gate(extension, memory_policy.master_user_ids)
+
     memory_service = None
     if config.memory_enabled:
-        memory_policy = MemoryPolicy.from_environment()
         db_path = Path(config.memory_db_path) if config.memory_db_path else Path("data") / "memory" / "shinku_memory.sqlite3"
+        embedding_build = build_embedding_provider(
+            memory_policy,
+            default_cache_dir=db_path.parent / "models" / "bge-m3",
+        )
         judge = (
             LLMMemoryJudge(runtime, recent_context_chars=memory_policy.recent_context_chars)
             if config.memory_judge_enabled
             else None
         )
         memory_service = MemoryService(
-            store=MemoryStore(db_path),
+            store=MemoryStore(
+                db_path,
+                embedding_provider=embedding_build.provider,
+                semantic_enabled=memory_policy.semantic_enabled,
+                semantic_backfill_batch_size=memory_policy.semantic_backfill_batch_size,
+                semantic_min_score=memory_policy.semantic_min_score,
+                embedding_status=embedding_build.status,
+                embedding_error=embedding_build.error,
+            ),
             router=MemoryRouter(
                 judge=judge,
                 deterministic_guards=memory_policy.deterministic_guards,
@@ -222,11 +364,92 @@ def assemble_qq_agent(
             ),
             policy=memory_policy,
         )
+        if embedding_build.provider is not None and memory_service.store.semantic_enabled:
+            memory_service.store.start_embedding_worker(
+                interval_seconds=memory_policy.semantic_index_interval_seconds,
+            )
+    effective_tool_host = tool_host or ToolHost(ToolRegistry())
+    change_tracker = RuntimeChangeTracker.from_environment()
+    if extension is not None:
+        try:
+            extension.register_tools(registry=effective_tool_host.registry, config=config)
+        except RuntimeExtensionError as exc:
+            raise QQAgentConfigError(str(exc)) from exc
+    if memory_service is not None and effective_tool_host.registry.get("memory_search") is None:
+        effective_tool_host.registry.register(MemorySearchTool(memory_service), name="memory_search")
+    task_coordinator = AgentTaskCoordinator(
+        state_path=config.agent_task_store_path or None,
+    )
+
+    def self_state_provider(*, refresh: bool = False) -> Mapping[str, object]:
+        chat = getattr(runtime, "chat", None)
+        return {
+            "runtime": {
+                "model": str(getattr(chat, "model", "") or getattr(runtime, "chat_model", "") or ""),
+                "provider": str(getattr(chat, "provider", "") or getattr(runtime, "provider", "") or ""),
+            },
+            "config": config.diagnostics(),
+            "persona": persona.diagnostics(),
+            "agent": {
+                "max_rounds": config.max_rounds,
+                "history_turns": config.history_turns,
+                "recent_context_messages": config.recent_context_messages,
+                "sender_configured": bool(config.send_enabled and sender is not None),
+                "owner_tool_gate_enabled": bool(memory_policy.master_user_ids),
+                "configured_master_count": len(memory_policy.master_user_ids),
+            },
+            "tools": {"registered": list(effective_tool_host.registry.names())},
+            "changes": change_tracker.diagnostics(
+                registered_tools=effective_tool_host.registry.names(),
+                refresh=refresh,
+            ),
+        }
+
+    if effective_tool_host.registry.get("read_self_state") is None:
+        effective_tool_host.registry.register(
+            SelfStateTool(
+                self_state_provider,
+                fresh_provider=lambda: self_state_provider(refresh=True),
+            ),
+            name="read_self_state",
+        )
+    change_tracker.start(registered_tools=effective_tool_host.registry.names())
+    risk_by_tool = dict(effective_policy.risk_by_tool)
+    risk_by_tool.setdefault("memory_search", "low")
+    risk_by_tool.setdefault("read_self_state", "low")
+    effective_policy = replace(effective_policy, risk_by_tool=risk_by_tool)
+    reply_host = ReplyHost(
+        enabled=config.reply_host_enabled,
+        long_trigger_chars=config.reply_long_trigger_chars,
+        max_segment_chars=config.reply_max_segment_chars,
+        short_max_segments=config.reply_short_max_segments,
+        long_max_segments=config.reply_long_max_segments,
+        strip_final_periods=config.reply_strip_final_periods,
+    )
+    command_state = QQCommandState.from_environment(state_path=config.command_state_path)
+    bot_ids = _csv_values(os.environ.get("SHINKU_QQ_BOT_IDS", ""))
+    chat_flow = ChatFlowController.from_environment()
+    system_prompt = persona.text
+    command_interpreter = None
+    if extension is not None:
+        try:
+            system_prompt = extension.augment_system_prompt(prompt=system_prompt, config=config)
+            command_interpreter = extension.build_command_interpreter(
+                state=command_state,
+                runtime=runtime,
+                memory_inspector=memory_service.inspect if memory_service is not None else None,
+                memory_reset=memory_service.reset_all if memory_service is not None else None,
+                runtime_snapshot=self_state_provider,
+                task_controller=task_coordinator.control,
+                config=config,
+            )
+        except RuntimeExtensionError as exc:
+            raise QQAgentConfigError(str(exc)) from exc
     bridge = QQAgentBridge(
         runtime=runtime,
-        system_prompt=persona.text,
+        system_prompt=system_prompt,
         sender=sender if config.send_enabled else None,
-        tool_host=tool_host,
+        tool_host=effective_tool_host,
         allowed_tool_names=allowed_tool_names,
         build_user_prompt=build_user_prompt,
         max_rounds=config.max_rounds,
@@ -235,8 +458,25 @@ def assemble_qq_agent(
         temperature=config.temperature,
         history_turns=config.history_turns,
         recent_context_messages=config.recent_context_messages,
+        bot_ids=bot_ids,
+        master_user_ids=memory_policy.master_user_ids,
+        owner_gate_required=extension is not None,
         approval_ttl_seconds=config.approval_ttl_seconds,
         approval_store=approval_store,
         memory_service=memory_service,
+        reply_host=reply_host,
+        reply_segment_delay_seconds=config.reply_segment_delay_seconds,
+        command_state=command_state,
+        command_interpreter=command_interpreter,
+        chat_flow=chat_flow,
+        self_state_provider=self_state_provider,
+        task_controller=task_coordinator.control,
     )
-    return QQAgentAssembly(config=config, persona=persona, bridge=bridge)
+    return QQAgentAssembly(
+        config=config,
+        persona=persona,
+        bridge=bridge,
+        task_coordinator=task_coordinator,
+        extension=extension,
+        change_tracker=change_tracker,
+    )

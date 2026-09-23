@@ -79,6 +79,8 @@ class RuntimeCapabilitiesMixin:
         host = self._bundle_host(bundle)
         model = str(getattr(bundle, "model", "") or "").strip().lower()
         known = PROVIDER_TOOL_PROFILES.get((host, model))
+        if known is None and ":" in host:
+            known = PROVIDER_TOOL_PROFILES.get((host.rsplit(":", 1)[0], model))
         return known if known is not None else self._configured_tool_profile(host=host, model=model)
 
     def _configured_tool_profile(self, *, host: str, model: str) -> ProviderToolProfile:
@@ -93,7 +95,7 @@ class RuntimeCapabilitiesMixin:
                 if parsed is None:
                     continue
                 item_host, item_model, coexist_json = parsed
-                if item_host not in {"*", clean_host} or item_model not in {"*", clean_model}:
+                if not self._allowlist_host_matches(item_host, clean_host) or item_model not in {"*", clean_model}:
                     continue
                 if coexist_json:
                     return ProviderToolProfile(
@@ -134,9 +136,15 @@ class RuntimeCapabilitiesMixin:
         fields = [field.strip() for field in text.split(":") if field.strip()]
         if not fields:
             return None
-        host = self._normalize_allowlist_host(fields[0])
-        model = fields[1] if len(fields) > 1 else "*"
-        mode = fields[2] if len(fields) > 2 else ""
+        mode = ""
+        if fields[-1] in {"json", "response_json", "forced_json"}:
+            mode = fields.pop()
+        if len(fields) >= 3 and fields[-2].isdigit():
+            host = self._normalize_allowlist_host(":".join(fields[:-1]))
+            model = fields[-1]
+        else:
+            host = self._normalize_allowlist_host(fields[0])
+            model = ":".join(fields[1:]) if len(fields) > 1 else "*"
         return (host, model, mode in {"json", "response_json", "forced_json"}) if host and model else None
 
     def _normalize_allowlist_host(self, value: Any) -> str:
@@ -144,16 +152,39 @@ class RuntimeCapabilitiesMixin:
         if text == "*":
             return text
         if "://" in text:
-            text = urlparse(text).netloc
+            parsed = urlparse(text)
+            text = parsed.netloc or parsed.path
         text = text.split("/", 1)[0].rsplit("@", 1)[-1]
-        return text.split(":", 1)[0].strip()
+        return text.strip().lower()
+
+    @staticmethod
+    def _allowlist_host_matches(allowed: str, actual: str) -> bool:
+        """无端口旧白名单按主机匹配；带端口的白名单精确到代理实例。"""
+
+        if allowed == "*" or allowed == actual:
+            return True
+        try:
+            allowed_parts = urlparse(f"//{allowed}")
+            actual_parts = urlparse(f"//{actual}")
+            allowed_host = str(allowed_parts.hostname or "").lower()
+            actual_host = str(actual_parts.hostname or "").lower()
+            allowed_port = allowed_parts.port
+            actual_port = actual_parts.port
+        except ValueError:
+            return False
+        if not allowed_host or allowed_host != actual_host:
+            return False
+        return allowed_port is None or allowed_port == actual_port
 
     def _bundle_host(self, bundle: ModelBundle) -> str:
         raw = str(getattr(bundle.client, "base_url", "") or "").strip()
         if raw and "://" not in raw:
             raw = f"https://{raw}"
         try:
-            return str(urlparse(raw).hostname or "").strip().lower()
+            parsed = urlparse(raw)
+            host = str(parsed.hostname or "").strip().lower()
+            port = parsed.port
+            return f"{host}:{port}" if host and port is not None else host
         except Exception:
             return ""
 

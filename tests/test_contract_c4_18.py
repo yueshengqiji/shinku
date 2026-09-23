@@ -73,6 +73,34 @@ class NapCatTurnDispatcherTests(unittest.TestCase):
         self.assertEqual(receipt.dispatched, 1)
         self.assertEqual(receipt.error, "handler_error:RuntimeError")
 
+    def test_recent_visual_is_inherited_by_explicit_followup_only(self) -> None:
+        turns = []
+        now = [0.0]
+        dispatcher = NapCatTurnDispatcher(
+            handler=turns.append,
+            flush_batch=lambda: host.ingress.flush(),
+            timer_factory=_FakeTimer,
+            clock=lambda: now[0],
+            visual_followup_turns=3,
+        )
+        host = NapCatHost(turn_dispatcher=dispatcher)
+
+        host.handle_event(self._event("m-img", "", image=True), at=1.0)
+        dispatcher.flush()
+        now[0] = 1.5
+        host.handle_event(self._event("m-q1", "你看这是谁"), at=2.0)
+        dispatcher.flush()
+
+        self.assertTrue(turns[1].visual_context_inherited)
+        self.assertEqual(turns[1].visual_context_source_message_id, "m-img")
+        self.assertEqual(turns[1].visuals_for("m-q1")[0].reference, "data:image/png;base64,aGVsbG8=")
+
+        now[0] = 2.0
+        host.handle_event(self._event("m-unrelated", "天气怎么样"), at=3.0)
+        dispatcher.flush()
+        self.assertFalse(turns[2].visual_context_inherited)
+        self.assertEqual(turns[2].visuals_for("m-unrelated"), ())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,8 @@ from .approval import ConsentDecision, ConsentResolver, LLMConsentResolver, Tool
 from .loop import AgentDecision, AgentLoop, AgentRunResult, AgentState, ApprovalGate
 from .pending import InMemoryPendingApprovalStore, JsonPendingApprovalStore, PendingApprovalRecord, PendingApprovalStore
 from .planner import LLMPlanner
+from .self_state import SelfStateTool
+from .change_awareness import RuntimeChangeTracker
 
 __all__ = [
     "AgentDecision",
@@ -21,4 +23,6 @@ __all__ = [
     "JsonPendingApprovalStore",
     "PendingApprovalRecord",
     "PendingApprovalStore",
+    "SelfStateTool",
+    "RuntimeChangeTracker",
 ]

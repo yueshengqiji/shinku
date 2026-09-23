@@ -40,13 +40,16 @@ def create_napcat_webhook_router(
             result = host.handle_event(await request.body())
         except (TypeError, ValueError):
             return JSONResponse({"ok": False, "error": "invalid_napcat_event"}, status_code=400)
-        return JSONResponse(
-            {
+        payload = {
                 "ok": True,
                 "scheduled": result.scheduled,
                 "visual_ready": result.visual.ready,
                 "visual_pending": result.visual.pending,
-            },
+        }
+        if result.welcome is not None:
+            payload["welcome"] = result.welcome.as_dict()
+        return JSONResponse(
+            payload,
             status_code=200,
         )
 

@@ -191,6 +191,21 @@ PROVIDER_TOOL_PROFILES: dict[tuple[str, str], ProviderToolProfile] = {
         verified=True,
         notes="Project probe: tools and response_format=json_object can coexist.",
     ),
+    (
+        "api.pinaic.com",
+        "gemini-2.5-pro",
+    ): ProviderToolProfile(
+        supports_native_tools=True,
+        native_tools_coexist_with_forced_json=False,
+        verified=True,
+        force_response_json=False,
+        notes=(
+            "Pinaic forwarded an OpenAI-compatible native tool_call for this exact "
+            "host/model in a harmless live probe on 2026-09-22. Keep forced "
+            "response_format=json_object off when tools are available until JSON "
+            "coexistence is separately verified."
+        ),
+    ),
 }
 
 

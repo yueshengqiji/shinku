@@ -1,0 +1,3 @@
+# Optional private-runtime dependency for local semantic memory retrieval.
+# The public core remains usable without this file.
+sentence-transformers>=3.0,<6

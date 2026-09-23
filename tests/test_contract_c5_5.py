@@ -92,8 +92,9 @@ class IndependentGrayJointTests(unittest.TestCase):
         self.assertEqual(sent[0].segments[0].text, "联合回归已收到。")
         self.assertEqual(len(runtime.calls), 1)
         records = self.memory.store.search(query="请确认联合回归", scope="group:g-joint")
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].text, "请确认联合回归")
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record.text for record in records}, {"请确认联合回归", "联合回归已收到。"})
+        self.assertEqual({record.metadata.get("role") for record in records}, {"user", "assistant"})
 
     def test_sender_disabled_keeps_memory_and_never_delivers(self) -> None:
         receipt, replies, _runtime = self._run_event(sender=None)
@@ -101,8 +102,9 @@ class IndependentGrayJointTests(unittest.TestCase):
         self.assertEqual(receipt.dispatched, 1)
         self.assertEqual((replies[0].delivery_status, replies[0].sent), ("dry_run", False))
         records = self.memory.store.search(query="请确认联合回归", scope="group:g-joint")
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].text, "请确认联合回归")
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record.text for record in records}, {"请确认联合回归", "联合回归已收到。"})
+        self.assertEqual({record.metadata.get("role") for record in records}, {"user", "assistant"})
 
 
 if __name__ == "__main__":

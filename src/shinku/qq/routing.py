@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .commands import command_text_for_conversation
 from .message import IncomingMessage, MessageSegment
 
 __all__ = ["ReplyRoutePolicy", "RouteDecision"]
@@ -80,10 +81,35 @@ class ReplyRoutePolicy:
 
     def decide(self, message: IncomingMessage) -> RouteDecision:
         image_only = message.has_media and not message.text.strip()
+        if message.is_poke:
+            if not self._poke_targets_bot(message):
+                return RouteDecision(False, "poke_not_for_bot")
+            return RouteDecision(
+                True,
+                "qq_poke",
+                addressed=True,
+                priority=95,
+            )
+        # Private commands are available directly.  In a group the slash is
+        # control-plane traffic only when the message also explicitly @s this
+        # bot.  An unaddressed group ``/...`` therefore follows the ordinary
+        # group route instead of changing state or entering the interpreter.
+        at_bot = self._mentions_bot(message)
+        if command_text_for_conversation(
+            message.text,
+            message.conversation_type,
+            mentioned_bot=at_bot and self.allow_group_at,
+        ):
+            return RouteDecision(
+                True,
+                "slash_command",
+                addressed=True,
+                priority=110,
+                image_only=image_only,
+            )
         if message.conversation_type == "private" and self.allow_private:
             return RouteDecision(True, "private_message", priority=100, image_only=image_only)
 
-        at_bot = self._mentions_bot(message)
         if at_bot and self.allow_group_at:
             return RouteDecision(True, "mentioned_bot", addressed=True, priority=90, image_only=image_only)
 
@@ -137,12 +163,17 @@ class ReplyRoutePolicy:
         """
 
         configured = {str(item).strip() for item in self.bot_ids if str(item).strip()}
-        if configured:
-            return configured
         self_id = message.raw_event.get("self_id")
         if self_id is not None and str(self_id).strip():
             configured.add(str(self_id).strip())
         return configured
+
+    def _poke_targets_bot(self, message: IncomingMessage) -> bool:
+        target = message.raw_event.get("target_id", message.raw_event.get("targetId"))
+        target_text = str(target or "").strip()
+        if not target_text:
+            return False
+        return target_text in self._effective_bot_ids(message)
 
     @staticmethod
     def _reply_target_id(message: IncomingMessage) -> str:

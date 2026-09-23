@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Shinku 控制中枢</title>
+  <link rel="stylesheet" href="/debug/hub/assets/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>Shinku 控制中枢</h1><div class="subtitle">独立版 · 本机控制与运行监控</div></div>
+    <div class="header-actions"><div id="mode" class="badge">仅限本机操作</div><button id="refresh-now" type="button">立即刷新</button><button id="auto-refresh" type="button" aria-pressed="true">自动刷新：开</button></div>
+  </header>
+  <section class="grid">
+    <article class="card"><h2>服务</h2><div id="service" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card"><h2>Agent</h2><div id="agent" class="kv"><div>加载中</div><div>—</div></div><div id="agent-actions" class="actions"></div></article>
+    <article class="card"><h2>记忆</h2><div id="memory" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card"><h2>NapCat</h2><div id="napcat" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card"><h2>运行配置</h2><div id="runtime-config" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card wide"><h2>运行指标</h2><div id="metrics" class="metric-grid"><div class="empty">加载中</div></div></article>
+    <article class="card wide"><h2>模型服务</h2><div id="model-services"><div class="empty">加载中</div></div></article>
+  </section>
+  <section class="card metrics-history"><h2>近七日指标</h2><div id="metrics-recent"><div class="empty">加载中</div></div></section>
+  <section class="card traces"><h2>最近处理链</h2><div id="traces"><div class="empty">加载中</div></div></section>
+  <section class="grid diagnostics-grid">
+    <article class="card"><h2>QQ 自检</h2><div id="qq-diagnostics"><div class="empty">加载中</div></div></article>
+    <article class="card"><h2>后台任务</h2><div id="agent-tasks"><div class="empty">加载中</div></div></article>
+  </section>
+  <section class="card wide approval-inspector">
+    <h2>待授权工具</h2>
+    <div class="approval-form">
+      <input id="approval-conversation" placeholder="会话 ID（用于查看当前待授权请求）">
+      <button id="approval-inspect" type="button">查看授权状态</button>
+    </div>
+    <div id="approval-result"><div class="empty">只查看，不在这里批准或执行工具。</div></div>
+  </section>
+  <section class="card wide"><h2>工具目录</h2><div id="capabilities"><div class="empty">加载中</div></div></section>
+  <section class="card wide memory-inspector">
+    <h2>记忆检视</h2>
+    <div class="memory-form">
+      <input id="memory-conversation" placeholder="会话 ID（例如群号或 QQ 号）">
+      <select id="memory-type"><option value="private">私聊</option><option value="group">群聊</option></select>
+      <select id="memory-mode"><option value="recent">最近记录</option><option value="retrieve">相关检索</option><option value="summary">摘要</option><option value="facts">长期事实</option></select>
+      <input id="memory-query" placeholder="可选：检索问题或关键词">
+      <button id="memory-inspect" type="button">读取记忆</button>
+    </div>
+    <div id="memory-result"><div class="empty">输入会话 ID 后读取；不会自动把记忆内容注入对话。</div></div>
+  </section>
+  <section class="card logs"><h2>运行日志</h2><div id="logs"><div class="empty">加载中</div></div></section>
+  <div id="updated" class="footer">尚未读取状态</div>
+</main>
+<script src="/debug/hub/assets/app.js" defer></script>
+</body>
+</html>

@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["MemoryDecision", "MemoryRecord", "MemoryContext", "ForgetReport"]
+HISTORY_MODES = ("none", "recent", "retrieve", "summary")
+
+__all__ = ["HISTORY_MODES", "MemoryDecision", "MemoryRecord", "MemoryContext", "ForgetReport"]
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,22 @@ class MemoryDecision:
     confidence: float = 0.0
     reason: str = ""
     used_model: bool = False
+    # ``need_retrieval`` remains for compatibility with the first contract.
+    # New routing code uses the four-level history mode instead.
+    history_mode: str = ""
+    local_signals: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        mode = str(self.history_mode or "").strip().lower()
+        if mode not in HISTORY_MODES:
+            mode = "retrieve" if self.need_retrieval else "none"
+        object.__setattr__(self, "history_mode", mode)
+        if mode in {"retrieve", "summary"} and not self.need_retrieval:
+            object.__setattr__(self, "need_retrieval", True)
+
+    @property
+    def needs_history(self) -> bool:
+        return self.history_mode != "none"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +54,9 @@ class MemoryDecision:
             "confidence": self.confidence,
             "reason": self.reason,
             "used_model": self.used_model,
+            "history_mode": self.history_mode,
+            "needs_history": self.needs_history,
+            "local_signals": list(self.local_signals),
         }
 
 
@@ -76,12 +97,18 @@ class MemoryContext:
     decision: MemoryDecision
     records: tuple[MemoryRecord, ...] = ()
     rendered: str = ""
+    retrieved_count: int = 0
+    injected_chars: int = 0
+    audit: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "decision": self.decision.as_dict(),
             "records": [record.as_dict() for record in self.records],
             "rendered": self.rendered,
+            "retrieved_count": self.retrieved_count,
+            "injected_chars": self.injected_chars,
+            "audit": dict(self.audit),
         }
 
 

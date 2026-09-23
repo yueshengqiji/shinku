@@ -20,7 +20,7 @@ MEDIA_SUFFIXES = frozenset({
     ".ogg", ".mp4", ".avi", ".mkv", ".flac", ".ttf", ".otf", ".woff", ".woff2",
 })
 IGNORED_DIRS = frozenset({
-    ".git", ".pytest_cache", "__pycache__", ".venv", "venv", "build", "dist", "data",
+    ".git", ".pytest_cache", "__pycache__", ".venv", "venv", "build", "dist", "data", "private",
 })
 
 

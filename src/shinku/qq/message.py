@@ -8,15 +8,22 @@ NapCat、发送消息或调用模型。尤其不把图片、文件和引用折�
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import html
+import re
 from typing import Any
 
-__all__ = ["IncomingMessage", "MessageSegment"]
+__all__ = ["IncomingMessage", "MessageSegment", "is_group_increase_event", "is_poke_event"]
 
 
 _MEDIA_KINDS = frozenset({"image", "file", "audio", "video"})
-_KNOWN_KINDS = _MEDIA_KINDS | frozenset({"text", "at", "reply", "face", "unknown"})
+_KNOWN_KINDS = _MEDIA_KINDS | frozenset({"text", "at", "reply", "face", "poke", "unknown"})
 _ID_KEYS = ("message_id", "messageId", "id")
+_HTML_IMAGE_RE = re.compile(
+    r"<img\b[^>]*?\bsrc\s*=\s*(?P<quote>['\"])(?P<src>.*?)(?P=quote)[^>]*?/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CQ_IMAGE_RE = re.compile(r"\[CQ:image(?P<attrs>[^\]]*)\]", re.IGNORECASE)
 
 
 def _first_text(mapping: Mapping[str, Any], *keys: str) -> str:
@@ -29,6 +36,115 @@ def _first_text(mapping: Mapping[str, Any], *keys: str) -> str:
 
 def _mapping_copy(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _inline_message_segments(value: str) -> tuple["MessageSegment", ...]:
+    """Decode image markup that some QQ bridges put in a plain string.
+
+    OneBot normally sends image segments.  A few QQ/NapCat paths instead put
+    ``<img src=...>`` or ``[CQ:image,...]`` in ``raw_message``.  Treating
+    those strings as ordinary text is irreversible: the visual bridge never
+    gets a file reference.  This parser only recognizes explicit image
+    markers and leaves surrounding text untouched.
+    """
+
+    text = str(value or "")
+    if not text:
+        return ()
+    matches: list[tuple[int, int, MessageSegment]] = []
+    for match in _HTML_IMAGE_RE.finditer(text):
+        source = html.unescape(str(match.group("src") or "").strip())
+        if not source:
+            continue
+        matches.append(
+            (
+                match.start(),
+                match.end(),
+                MessageSegment.from_value({"type": "image", "data": {"url": source}}),
+            )
+        )
+    for match in _CQ_IMAGE_RE.finditer(text):
+        attrs: dict[str, str] = {}
+        raw_attrs = str(match.group("attrs") or "").lstrip(",")
+        for item in raw_attrs.split(","):
+            if "=" not in item:
+                continue
+            key, raw_value = item.split("=", 1)
+            key = key.strip()
+            raw_value = html.unescape(raw_value.strip())
+            if key and raw_value:
+                attrs[key] = raw_value
+        matches.append(
+            (
+                match.start(),
+                match.end(),
+                MessageSegment.from_value({"type": "image", "data": attrs}),
+            )
+        )
+    if not matches:
+        return (MessageSegment(kind="text", text=text),)
+
+    matches.sort(key=lambda item: (item[0], item[1]))
+    segments: list[MessageSegment] = []
+    cursor = 0
+    for start, end, image in matches:
+        if start < cursor:
+            continue
+        if start > cursor:
+            segments.append(MessageSegment(kind="text", text=text[cursor:start]))
+        segments.append(image)
+        cursor = end
+    if cursor < len(text):
+        segments.append(MessageSegment(kind="text", text=text[cursor:]))
+    return tuple(segment for segment in segments if segment.text or segment.is_media)
+
+
+def is_poke_event(event: Mapping[str, Any]) -> bool:
+    """Return whether a OneBot event is one of NapCat's poke variants.
+
+    NapCat installations in the wild use both ``notice/poke`` and
+    ``notify/notify/poke`` shapes.  Keeping the shape check here gives every
+    adapter the same event boundary without accepting unrelated notices such
+    as group uploads or recalls as conversational messages.
+    """
+
+    if not isinstance(event, Mapping):
+        return False
+    post_type = str(event.get("post_type") or "").strip().casefold()
+    notice_type = str(event.get("notice_type") or "").strip().casefold()
+    sub_type = str(event.get("sub_type") or event.get("notice_sub_type") or "").strip().casefold()
+    if post_type not in {"notice", "notify"}:
+        return False
+    if notice_type in {"poke", "group_poke"}:
+        return True
+    return notice_type == "notify" and sub_type in {"poke", "group_poke"}
+
+
+def is_group_increase_event(event: Mapping[str, Any]) -> bool:
+    """Return whether a OneBot event announces a new group member.
+
+    The event is kept separate from chat messages so a welcome policy can act
+    on it without creating an LLM turn or a passive memory record.
+    """
+
+    if not isinstance(event, Mapping):
+        return False
+    post_type = str(event.get("post_type") or "").strip().casefold()
+    notice_type = str(event.get("notice_type") or "").strip().casefold()
+    return post_type in {"notice", "notify"} and notice_type == "group_increase"
+
+
+def _poke_actor_id(event: Mapping[str, Any], *, target_id: str = "") -> str:
+    sender = event.get("sender") if isinstance(event.get("sender"), Mapping) else {}
+    candidates = (
+        _first_text(event, "operator_id", "operatorId"),
+        _first_text(event, "sender_id", "senderId", "user_id", "userId"),
+        _first_text(sender, "user_id", "userId", "id"),
+    )
+    for candidate in candidates:
+        if candidate and candidate != target_id:
+            return candidate
+    return next((candidate for candidate in candidates if candidate), "")
 
 
 @dataclass(frozen=True)
@@ -103,42 +219,116 @@ class IncomingMessage:
     segments: tuple[MessageSegment, ...]
     timestamp: float | None = None
     raw_event: dict[str, Any] = field(default_factory=dict)
+    event_kind: str = "message"
+    quoted_message: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_event(cls, event: Mapping[str, Any]) -> "IncomingMessage":
         if not isinstance(event, Mapping):
             raise TypeError("message event must be a mapping")
         sender = event.get("sender") if isinstance(event.get("sender"), Mapping) else {}
-        segments_value = event.get("segments")
-        if segments_value is None:
-            segments_value = event.get("message")
-        if isinstance(segments_value, Sequence) and not isinstance(segments_value, (str, bytes, bytearray)):
-            segments = tuple(MessageSegment.from_value(item) for item in segments_value)
-        elif segments_value is None:
-            text = event.get("raw_message", event.get("text", ""))
-            segments = (MessageSegment.from_value(str(text)),) if str(text or "") else ()
+        event_kind = (
+            "poke"
+            if is_poke_event(event)
+            else "group_increase"
+            if is_group_increase_event(event)
+            else "message"
+        )
+        if event_kind == "poke":
+            target_id = _first_text(event, "target_id", "targetId")
+            actor_id = _poke_actor_id(event, target_id=target_id)
+            actor_label = _first_text(sender, "card", "nickname", "remark")
+            marker = "[QQ戳一戳]"
+            segments = (
+                MessageSegment(
+                    kind="poke",
+                    text=marker,
+                    payload={
+                        "target_id": target_id,
+                        "actor_id": actor_id,
+                        "actor_label": actor_label,
+                    },
+                ),
+            )
+        elif event_kind == "group_increase":
+            # This notice has no conversational content. Keep its identity so
+            # a deterministic welcome policy can consume it, but never make
+            # up prompt text for the Agent.
+            segments = ()
         else:
-            segments = (MessageSegment.from_value(segments_value),)
+            segments_value = event.get("segments")
+            if segments_value is None:
+                segments_value = event.get("message")
+            if isinstance(segments_value, Sequence) and not isinstance(segments_value, (str, bytes, bytearray)):
+                normalized: list[MessageSegment] = []
+                for item in segments_value:
+                    if isinstance(item, str):
+                        normalized.extend(_inline_message_segments(item))
+                    else:
+                        normalized.append(MessageSegment.from_value(item))
+                segments = tuple(normalized)
+            elif segments_value is None:
+                text = event.get("raw_message", event.get("text", ""))
+                segments = _inline_message_segments(str(text)) if str(text or "") else ()
+            elif isinstance(segments_value, str):
+                segments = _inline_message_segments(segments_value)
+            else:
+                segments = (MessageSegment.from_value(segments_value),)
 
         conversation_type = _first_text(event, "conversation_type", "message_type", "chat_type").lower()
         if conversation_type not in {"private", "group", "guild", "unknown"}:
             conversation_type = "group" if event.get("group_id") else "private"
+        if event_kind == "poke":
+            target_id = _first_text(event, "target_id", "targetId")
+            sender_id = _poke_actor_id(event, target_id=target_id)
+        else:
+            sender_id = _first_text(event, "sender_id", "user_id", "userId") or _first_text(
+                sender, *_ID_KEYS, "user_id", "userId"
+            )
+        conversation_id = _first_text(event, "conversation_id", "conversationId", "group_id", "guild_id") or _first_text(
+            sender, "conversation_id", "group_id"
+        )
+        # OneBot private-message events normally expose only ``user_id``.
+        # Keep the normalized conversation identity usable for both memory
+        # scope and send_private_msg instead of letting it become ``unknown``.
+        if not conversation_id and conversation_type == "private":
+            conversation_id = sender_id
+        message_id = _first_text(event, *_ID_KEYS, "event_id", "eventId")
+        if event_kind == "poke" and not message_id:
+            target_id = _first_text(event, "target_id", "targetId") or "unknown"
+            message_id = f"poke:{conversation_id or 'unknown'}:{sender_id or 'unknown'}:{target_id}:{event.get('time', '')}"
+        if event_kind == "group_increase" and not message_id:
+            sub_type = _first_text(event, "sub_type", "notice_sub_type") or "unknown"
+            message_id = (
+                f"group_increase:{conversation_id or 'unknown'}:{sender_id or 'unknown'}:"
+                f"{sub_type}:{event.get('time', '')}"
+            )
+        quoted_message: dict[str, Any] = {}
+        embedded_quote = _embedded_quote_event(segments)
+        if embedded_quote:
+            embedded_quote.setdefault("message_id", _reply_id_from_segments(segments))
+            embedded_quote.setdefault("conversation_type", conversation_type)
+            embedded_quote.setdefault("conversation_id", conversation_id)
+            embedded_quote.setdefault("user_id", sender_id)
+            try:
+                quoted_message = cls.from_event(embedded_quote).as_dict()
+            except (TypeError, ValueError):
+                quoted_message = {}
         return cls(
-            message_id=_first_text(event, *_ID_KEYS),
-            sender_id=_first_text(event, "sender_id", "user_id", "userId") or _first_text(sender, *_ID_KEYS, "user_id"),
-            conversation_id=(
-                _first_text(event, "conversation_id", "conversationId", "group_id", "guild_id")
-                or _first_text(sender, "conversation_id", "group_id")
-            ),
+            message_id=message_id,
+            sender_id=sender_id,
+            conversation_id=conversation_id,
             conversation_type=conversation_type,
             segments=segments,
             timestamp=_timestamp(event.get("time", event.get("timestamp"))),
             raw_event=dict(event),
+            event_kind=event_kind,
+            quoted_message=quoted_message,
         )
 
     @property
     def text(self) -> str:
-        return "".join(segment.text for segment in self.segments if segment.kind in {"text", "at", "face"})
+        return "".join(segment.text for segment in self.segments if segment.kind in {"text", "at", "face", "poke"})
 
     @property
     def attachments(self) -> tuple[dict[str, str], ...]:
@@ -152,15 +342,76 @@ class IncomingMessage:
     def has_reply(self) -> bool:
         return any(segment.kind == "reply" for segment in self.segments)
 
+    @property
+    def reply_message_ids(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for segment in self.segments:
+            if segment.kind != "reply":
+                continue
+            data = segment.payload.get("data") if isinstance(segment.payload.get("data"), Mapping) else {}
+            for source in (data, segment.payload):
+                for key in ("id", "message_id", "messageId"):
+                    value = source.get(key)
+                    if value is not None and str(value).strip():
+                        values.append(str(value).strip())
+        return tuple(dict.fromkeys(values))
+
+    @property
+    def sender_label(self) -> str:
+        raw = self.raw_event if isinstance(self.raw_event, Mapping) else {}
+        sender = raw.get("sender") if isinstance(raw.get("sender"), Mapping) else {}
+        for source in (sender, raw):
+            for key in ("card", "nickname", "remark", "display_name", "displayName"):
+                value = str(source.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
+
+    @property
+    def quoted_text(self) -> str:
+        value = self.quoted_message if isinstance(self.quoted_message, Mapping) else {}
+        return str(value.get("text") or value.get("raw_message") or "").strip()
+
+    @property
+    def quoted_attachments(self) -> tuple[dict[str, str], ...]:
+        value = self.quoted_message if isinstance(self.quoted_message, Mapping) else {}
+        attachments = value.get("attachments")
+        if isinstance(attachments, list):
+            return tuple(dict(item) for item in attachments if isinstance(item, Mapping))
+        return ()
+
+    def with_quoted_message(self, quoted: "IncomingMessage | Mapping[str, Any] | None") -> "IncomingMessage":
+        """返回带引用快照的副本，不改动当前消息的正文和事件 ID。"""
+
+        if isinstance(quoted, IncomingMessage):
+            payload = quoted.as_dict()
+        elif isinstance(quoted, Mapping):
+            payload = dict(quoted)
+        else:
+            payload = {}
+        return replace(self, quoted_message=payload)
+
+    @property
+    def is_poke(self) -> bool:
+        return self.event_kind == "poke" or any(segment.kind == "poke" for segment in self.segments)
+
+    @property
+    def is_group_increase(self) -> bool:
+        return self.event_kind == "group_increase"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "message_id": self.message_id,
             "sender_id": self.sender_id,
             "conversation_id": self.conversation_id,
             "conversation_type": self.conversation_type,
+            "event_kind": self.event_kind,
+            "sender_label": self.sender_label,
             "segments": [segment.as_dict() for segment in self.segments],
             "text": self.text,
             "attachments": [dict(item) for item in self.attachments],
+            "reply_message_ids": list(self.reply_message_ids),
+            "quoted_message": dict(self.quoted_message) if self.quoted_message else None,
             "timestamp": self.timestamp,
         }
 
@@ -172,3 +423,34 @@ def _timestamp(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _reply_id_from_segments(segments: Sequence[MessageSegment]) -> str:
+    for segment in segments:
+        if segment.kind != "reply":
+            continue
+        data = segment.payload.get("data") if isinstance(segment.payload.get("data"), Mapping) else {}
+        for source in (data, segment.payload):
+            for key in ("id", "message_id", "messageId"):
+                value = source.get(key)
+                if value is not None and str(value).strip():
+                    return str(value).strip()
+    return ""
+
+
+def _embedded_quote_event(segments: Sequence[MessageSegment]) -> dict[str, Any]:
+    """取 OneBot reply 段里可能随附的原始引用内容。"""
+
+    for segment in segments:
+        if segment.kind != "reply":
+            continue
+        data = segment.payload.get("data") if isinstance(segment.payload.get("data"), Mapping) else {}
+        for source in (data, segment.payload):
+            for key in ("message", "segments", "raw_message", "text"):
+                value = source.get(key)
+                if value in (None, "", []):
+                    continue
+                if isinstance(value, Mapping):
+                    return dict(value)
+                return {"message": value} if key != "raw_message" else {"raw_message": value}
+    return {}

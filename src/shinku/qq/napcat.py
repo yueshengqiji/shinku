@@ -14,7 +14,7 @@ from urllib.parse import unquote, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from .delivery import DeliveryTransport, OutgoingMessage
-from .message import IncomingMessage
+from .message import IncomingMessage, is_group_increase_event, is_poke_event
 
 __all__ = [
     "NapCatActionTransport",
@@ -34,7 +34,8 @@ class NapCatEventAdapter:
     def normalize(self, event: Mapping[str, Any]) -> IncomingMessage:
         if not isinstance(event, Mapping):
             raise TypeError("napcat event must be a mapping")
-        if str(event.get("post_type") or "message").strip().lower() != "message":
+        post_type = str(event.get("post_type") or "message").strip().casefold()
+        if post_type != "message" and not is_poke_event(event) and not is_group_increase_event(event):
             raise ValueError("napcat event is not a message event")
         return IncomingMessage.from_event(event)
 
@@ -111,7 +112,8 @@ class NapCatVisualInputBridge:
 
     def build(self, message: IncomingMessage) -> NapCatVisualBatch:
         inputs: list[NapCatVisualInput] = []
-        for attachment in message.attachments:
+        attachments = tuple(message.attachments) + tuple(message.quoted_attachments)
+        for attachment in attachments:
             if str(attachment.get("kind") or "").strip().lower() != "image":
                 continue
             reference = next(
@@ -185,6 +187,11 @@ class NapCatImageMaterializer:
             return url
         if url.lower().startswith(("http://", "https://")):
             return self._from_url(url, attachment)
+        if url.lower().startswith("file://"):
+            # QQ desktop clients may expose a local image through the URL
+            # field (for example <img src="file://C:\\...">) instead of a
+            # separate local_path field.
+            return self._from_local(url, {**dict(attachment), "local_path": url})
 
         local_path = str(attachment.get("local_path") or "").strip()
         if local_path:
@@ -262,7 +269,15 @@ class NapCatImageMaterializer:
             parsed = urlparse(value)
             path = unquote(parsed.path or "")
             if parsed.netloc and parsed.netloc.lower() != "localhost":
-                path = f"{parsed.netloc}:{path}" if len(parsed.netloc) == 1 else f"//{parsed.netloc}{path}"
+                # Accept both standard ``file:///C:/...`` and the Windows
+                # desktop form ``file://C:\\...``.  In the latter urlparse
+                # places the whole drive path in ``netloc``.
+                if len(parsed.netloc) >= 2 and parsed.netloc[1] == ":":
+                    path = f"{parsed.netloc}{path}"
+                elif len(parsed.netloc) == 1:
+                    path = f"{parsed.netloc}:{path}"
+                else:
+                    path = f"//{parsed.netloc}{path}"
             if len(path) >= 3 and path[0] == "/" and path[2] == ":":
                 path = path[1:]
             return Path(path)
@@ -400,3 +415,20 @@ class NapCatHttpActionCaller:
         if not isinstance(decoded, Mapping):
             return {"status": "failed", "retcode": -1, "message": "napcat_invalid_response"}
         return dict(decoded)
+
+    def get_message(self, message_id: str) -> Mapping[str, Any] | None:
+        """显式回取一条引用消息；不会在普通 action 发送路径中自动触发。"""
+
+        identifier = str(message_id or "").strip()
+        if not identifier:
+            return None
+        response = self(action="get_msg", params={"message_id": identifier})
+        if str(response.get("status") or "").strip().lower() not in {"", "ok", "async"}:
+            return None
+        try:
+            if int(response.get("retcode", 0) or 0) != 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+        data = response.get("data")
+        return dict(data) if isinstance(data, Mapping) else None

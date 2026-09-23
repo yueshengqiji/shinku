@@ -102,16 +102,58 @@ class AgentDecision:
             id=str(raw_call.get("id") or ""),
         )
 
+    @staticmethod
+    def _speech_segments_text(value: Mapping[str, Any]) -> str:
+        """把既有回复宿主的分段格式折叠成 Agent 可交付的文本。
+
+        QQ 回复层允许模型只返回 ``speech_segments``；Agent 规划层此前只认
+        ``kind``/``reply``/``speech``，导致同一份有效回复被误判成
+        ``invalid_decision``，还没走到发送层就结束。
+        """
+
+        raw_segments = value.get("speech_segments")
+        if not isinstance(raw_segments, (list, tuple)):
+            return ""
+        segments: list[str] = []
+        for raw_segment in raw_segments:
+            if isinstance(raw_segment, Mapping):
+                raw_segment = (
+                    raw_segment.get("speech")
+                    or raw_segment.get("text")
+                    or raw_segment.get("content")
+                    or raw_segment.get("message")
+                )
+            text = str(raw_segment or "").strip()
+            if text:
+                segments.append(text)
+        return "\n".join(segments)
+
     @classmethod
     def from_value(cls, value: Any) -> "AgentDecision | None":
         if isinstance(value, cls):
             return value
         if not isinstance(value, Mapping):
             return None
+        status = str(value.get("status") or "").strip().lower()
         kind = str(value.get("kind") or value.get("action") or "").strip().lower()
         if not kind and ("tool_call" in value or "tool_calls" in value or "invocation" in value):
             kind = "tool"
-        text = str(value.get("text") or value.get("speech") or value.get("message") or "").strip()
+        text = str(
+            value.get("text")
+            or value.get("speech")
+            or value.get("reply")
+            or value.get("message")
+            or value.get("content")
+            or ""
+        ).strip()
+        if not text:
+            text = cls._speech_segments_text(value)
+        if not kind and status in {"reply", "respond", "response", "final", "answer", "done", "complete"}:
+            kind = "final"
+        if not kind and (text and ("speech" in value or "speech_segments" in value)):
+            kind = "final"
+        if not kind and status in {"wait", "waiting", "waiting_user", "ask"}:
+            kind = "wait"
         if kind in {"final", "answer", "done", "complete"}:
             return cls.final(text)
         if kind in {"wait", "waiting_user", "ask"}:

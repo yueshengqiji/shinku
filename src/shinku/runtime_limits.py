@@ -45,9 +45,11 @@ def _int_value(
 
 @dataclass(frozen=True)
 class RuntimeLimits:
-    """QQ 合并窗口和会话读取上限。"""
+    """QQ 合并窗口、视觉上下文和会话读取上限。"""
 
     qq_batch_window_seconds: float = 1.5
+    qq_visual_context_ttl_seconds: float = 600.0
+    qq_visual_followup_turns: int = 3
     session_list_limit: int = 50
     session_message_limit: int = 120
 
@@ -61,6 +63,20 @@ class RuntimeLimits:
                 1.5,
                 minimum=0.0,
                 maximum=60.0,
+            ),
+            qq_visual_context_ttl_seconds=_float_value(
+                env,
+                "SHINKU_QQ_VISUAL_CONTEXT_TTL_SECONDS",
+                600.0,
+                minimum=1.0,
+                maximum=3600.0,
+            ),
+            qq_visual_followup_turns=_int_value(
+                env,
+                "SHINKU_QQ_VISUAL_FOLLOWUP_TURNS",
+                3,
+                minimum=1,
+                maximum=8,
             ),
             session_list_limit=_int_value(
                 env,
@@ -81,6 +97,8 @@ class RuntimeLimits:
     def diagnostics(self) -> dict[str, int | float]:
         return {
             "qq_batch_window_seconds": self.qq_batch_window_seconds,
+            "qq_visual_context_ttl_seconds": self.qq_visual_context_ttl_seconds,
+            "qq_visual_followup_turns": self.qq_visual_followup_turns,
             "session_list_limit": self.session_list_limit,
             "session_message_limit": self.session_message_limit,
         }
