@@ -639,6 +639,32 @@ class CallChannelTests(unittest.TestCase):
         self.assertEqual(_metrics(runtime, "chat_json_plain_text_recoveries"), 1)
         self.assertEqual(_metrics(runtime, "chat_json_fallbacks"), 0)
 
+    def test_research_plain_text_recovery_does_not_inherit_transport_failure_outcome(self) -> None:
+        runtime = _make_runtime(scripts=[("response", FakeResponse("正文支持的答案。"))])
+        result = runtime.call_chat_json(system_prompt="s", user_prompt="u",
+            fallback={"kind": "final", "text": "fallback", "task_outcome": "failed", "_agent_plain_text_verify": True})
+        self.assertEqual(result, {"kind": "final", "text": "正文支持的答案。"})
+        self.assertEqual(_metrics(runtime, "chat_json_plain_text_recoveries"), 1)
+
+    def test_structured_model_failure_is_not_cleared_by_plain_text_opt_in(self) -> None:
+        runtime = _make_runtime(scripts=[("response", FakeResponse('{"kind":"final","text":"未完成","task_outcome":"failed"}'))])
+        result = runtime.call_chat_json(system_prompt="s", user_prompt="u",
+            fallback={"kind": "final", "text": "fallback", "task_outcome": "failed", "_agent_plain_text_verify": True})
+        self.assertEqual(result["task_outcome"], "failed")
+
+    def test_plain_text_without_research_gate_keeps_failure_default(self) -> None:
+        runtime = _make_runtime(scripts=[("response", FakeResponse("普通恢复文本"))])
+        result = runtime.call_chat_json(system_prompt="s", user_prompt="u",
+            fallback={"kind": "final", "text": "fallback", "task_outcome": "failed"})
+        self.assertEqual(result["task_outcome"], "failed")
+
+    def test_transport_error_with_plain_text_opt_in_is_still_failed(self) -> None:
+        runtime = _make_runtime(scripts=[("raise", RuntimeError("boom"))])
+        result = runtime.call_chat_json(system_prompt="s", user_prompt="u",
+            fallback={"kind": "final", "text": "fallback", "task_outcome": "failed", "_agent_plain_text_verify": True})
+        self.assertEqual(result["task_outcome"], "failed")
+        self.assertEqual(_metrics(runtime, "chat_json_plain_text_recoveries"), 0)
+
     def test_call_chat_json_falls_back_on_transport_error(self) -> None:
         runtime = _make_runtime(scripts=[("raise", RuntimeError("boom"))])
         result = runtime.call_chat_json(

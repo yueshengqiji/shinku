@@ -104,6 +104,24 @@ def _group_message(sender: str, text: str, *, group_id: str = "group-1") -> Inco
     )
 
 
+def _group_message_at_bot(sender: str, text: str, *, group_id: str = "group-1") -> IncomingMessage:
+    return IncomingMessage.from_event(
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "group_id": group_id,
+            "self_id": "bot-1",
+            "user_id": sender,
+            "sender": {"nickname": sender},
+            "message_id": f"{group_id}-{sender}-{text}",
+            "message": [
+                {"type": "at", "data": {"qq": "bot-1", "name": "真红"}},
+                {"type": "text", "data": {"text": text}},
+            ],
+        }
+    )
+
+
 class QQOwnerAccessTests(unittest.TestCase):
     def test_private_greeting_can_pick_up_volatile_group_exchange(self) -> None:
         runtime = _SpeechRuntime({"speech": "嗯……刚才那件事还没说完？"})
@@ -198,6 +216,22 @@ class QQOwnerAccessTests(unittest.TestCase):
             self.assertNotIn("这句只说在私聊里", prompt)
             self.assertNotIn("临时群聊也不能带进群", prompt)
 
+    def test_history_needs_greeting_suppresses_both_volatile_and_retained_handoffs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            memory = MemoryService(store=MemoryStore(Path(raw) / "memory.sqlite3"), router=MemoryRouter(),
+                policy=MemoryPolicy(master_user_ids=("master",), history_needs_enabled=True))
+            memory.record_turn(conversation_id="group-1", conversation_type="group", message_id="old",
+                text="保留旧话题标记", metadata={"sender_id": "master", "shinku_involved": True})
+            runtime = _SpeechRuntime({"speech": "嗯，我在。"})
+            bridge = QQAgentBridge(runtime=runtime, system_prompt="真红主人设", master_user_ids=("master",),
+                memory_service=memory)
+            bridge.observe_message(_group_message("master", "临时旧话题标记"))
+            for greeting in ("真红，在吗", "真红？"):
+                bridge.handle_turn(_turn("master", greeting))
+                prompt = str(runtime.calls[-1].get("user_prompt") or "")
+                self.assertNotIn("保留旧话题标记", prompt)
+                self.assertNotIn("临时旧话题标记", prompt)
+
     def test_required_owner_gate_fails_closed_when_owner_ids_are_missing(self) -> None:
         runtime = _ToolThenSpeechRuntime()
         handler = _SearchHandler()
@@ -210,7 +244,7 @@ class QQOwnerAccessTests(unittest.TestCase):
 
         result = bridge.handle_turn(_turn("anyone", "查一下"))
 
-        self.assertEqual((result.agent_status, result.final_text), ("completed", "……这类工具操作只听主人的。"))
+        self.assertEqual((result.agent_status, result.final_text), ("blocked", "……这类工具操作只听主人的。别的事情可以继续说。"))
         self.assertEqual(handler.calls, 0)
 
     def test_master_gets_a_compact_master_audience_block(self) -> None:
@@ -224,9 +258,78 @@ class QQOwnerAccessTests(unittest.TestCase):
         result = bridge.handle_turn(_turn("master", "陪我说会儿话"))
 
         self.assertEqual(result.agent_status, "completed")
-        prompt = str(runtime.calls[0]["user_prompt"])
+        prompt = "\n".join(runtime.calls[0].get("system_extra_blocks", []))
         self.assertIn("当前交互对象：主人", prompt)
-        self.assertIn("熟悉、亲近", prompt)
+        self.assertIn("自然回应他的具体话题", prompt)
+
+    def test_group_owner_call_gets_positive_familiarity_guidance(self) -> None:
+        runtime = _SpeechRuntime({"speech": "嗯，知道了。"})
+        message = _group_message_at_bot("master", "陪我说会儿话")
+        turn = QQTurn(
+            conversation_id="group-1",
+            conversation_type="group",
+            primary_message_id=message.message_id,
+            message_ids=(message.message_id,),
+            combined_text="陪我说会儿话",
+            messages=(message,),
+        )
+        bridge = QQAgentBridge(
+            runtime=runtime,
+            system_prompt="真红主人设",
+            master_user_ids=("master",),
+            bot_ids=("bot-1",),
+        )
+
+        result = bridge.handle_turn(turn)
+
+        self.assertEqual(result.agent_status, "completed")
+        system_context = "\n".join(runtime.calls[0].get("system_extra_blocks", []))
+        self.assertIn("主人在群聊中的优先感", system_context)
+        self.assertIn("适度偏心", system_context)
+        self.assertIn("主人（master）", str(runtime.calls[0].get("user_prompt") or ""))
+
+    def test_mixed_group_batch_marks_owner_without_granting_primary_friend_tools(self) -> None:
+        runtime = _SpeechRuntime({"speech": "先听你说完。"})
+        owner_message = _group_message_at_bot("master", "真红，你觉得呢？")
+        friend_message = _group_message_at_bot("friend", "帮我查一下")
+        turn = QQTurn(
+            conversation_id="group-1",
+            conversation_type="group",
+            primary_message_id=friend_message.message_id,
+            message_ids=(owner_message.message_id, friend_message.message_id),
+            combined_text="真红，你觉得呢？\n帮我查一下",
+            messages=(owner_message, friend_message),
+        )
+        handler = _SearchHandler()
+        bridge = QQAgentBridge(
+            runtime=runtime,
+            system_prompt="真红主人设",
+            tool_host=ToolHost(ToolRegistry({"search": handler})),
+            master_user_ids=("master",),
+            bot_ids=("bot-1",),
+        )
+
+        audience = bridge._audience_context(turn)
+        result = bridge.handle_turn(turn)
+
+        self.assertEqual(audience["role"], "other")
+        self.assertFalse(audience["is_master"])
+        self.assertTrue(audience["master_present"])
+        self.assertTrue(audience["master_addressed_to_bot"])
+        self.assertEqual(result.agent_status, "completed")
+        user_prompt = str(runtime.calls[0].get("user_prompt") or "")
+        history_turns = runtime.calls[0].get("history_turns") or []
+        dialogue_context = "\n".join(
+            [user_prompt]
+            + [str(item.get("content") or "") for item in history_turns if isinstance(item, dict)]
+        )
+        system_context = "\n".join(runtime.calls[0].get("system_extra_blocks", []))
+        self.assertIn("主人（master）", dialogue_context)
+        self.assertIn("群聊中的主人消息归属", system_context)
+        self.assertIn("当前主请求来自群友", system_context)
+        self.assertIn("同样明确地叫你", system_context)
+        self.assertIsNone(runtime.calls[0].get("native_tools"))
+        self.assertEqual(handler.calls, 0)
 
     def test_non_master_sees_no_tools_and_gets_distance_guidance(self) -> None:
         runtime = _SpeechRuntime({"speech": "这件事我不替别人做。"})
@@ -243,7 +346,7 @@ class QQOwnerAccessTests(unittest.TestCase):
         self.assertEqual(result.agent_status, "completed")
         self.assertEqual(handler.calls, 0)
         self.assertIsNone(runtime.calls[0].get("native_tools"))
-        prompt = str(runtime.calls[0]["user_prompt"])
+        prompt = "\n".join(runtime.calls[0].get("system_extra_blocks", []))
         self.assertIn("当前交互对象：其他人", prompt)
         self.assertIn("暧昧", prompt)
         self.assertIn("没有工具执行权限", prompt)
@@ -260,7 +363,7 @@ class QQOwnerAccessTests(unittest.TestCase):
 
         result = bridge.handle_turn(_turn("other", "查一下"))
 
-        self.assertEqual((result.agent_status, result.final_text), ("completed", "……这类工具操作只听主人的。"))
+        self.assertEqual((result.agent_status, result.final_text), ("blocked", "……这类工具操作只听主人的。别的事情可以继续说。"))
         self.assertEqual(handler.calls, 0)
 
     def test_non_master_cannot_approve_or_resume_master_pending_tool(self) -> None:

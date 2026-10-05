@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from shinku.agent.planner import ChatRuntime, PromptBuilder
 from shinku.agent.pending import JsonPendingApprovalStore
+from shinku.agent.task_state import AgentTaskStore
 from shinku.agent.loop import AGENT_MAX_ROUNDS_HARD_LIMIT
 from shinku.agent.self_state import SelfStateTool
 from shinku.agent.change_awareness import RuntimeChangeTracker
@@ -21,6 +22,7 @@ from shinku.hosts.tool_host import ToolHost
 from shinku.llm.runtime import LLMRuntime
 from shinku.memory import LLMMemoryJudge, MemoryPolicy, MemoryRouter, MemorySearchTool, MemoryService, MemoryStore
 from shinku.memory.embedding_factory import build_embedding_provider
+from shinku.memory.lifecycle_review import LLMLifecycleReviewer
 from shinku.persona import PersonaDocument, load_persona
 from shinku.extensions import RuntimeExtension, RuntimeExtensionError, load_runtime_extension
 from shinku.tools.execution import ExecutionPolicy
@@ -31,6 +33,7 @@ from .agent_bridge import QQAgentBridge, QQMessageSender
 from .chat_flow import ChatFlowController
 from .commands import QQCommandState
 from .reply_host import ReplyHost
+from .trace import TurnTraceStore
 
 __all__ = [
     "QQAgentConfig",
@@ -93,13 +96,19 @@ class QQAgentConfig:
     reply_host_enabled: bool = True
     reply_long_trigger_chars: int = 360
     reply_max_segment_chars: int = 600
-    reply_short_max_segments: int = 2
-    reply_long_max_segments: int = 4
     reply_segment_delay_seconds: float = 0.0
     reply_strip_final_periods: bool = True
     command_state_path: str = ""
     agent_task_store_path: str = ""
+    agent_state_store_path: str = ""
+    trace_store_path: str = ""
     runtime_extension_module: str = ""
+    async_agent_enabled: bool = False
+    async_queue_limit: int = 8
+    task_max_model_requests: int = 120
+    task_max_tokens: int = 600000
+    task_max_tools: int = 128
+    task_max_active_seconds: float = 1800.0
 
     def diagnostics(self) -> dict[str, object]:
         """返回安全配置快照，绝不返回 key 内容。"""
@@ -126,13 +135,17 @@ class QQAgentConfig:
             "reply_host_enabled": self.reply_host_enabled,
             "reply_long_trigger_chars": self.reply_long_trigger_chars,
             "reply_max_segment_chars": self.reply_max_segment_chars,
-            "reply_short_max_segments": self.reply_short_max_segments,
-            "reply_long_max_segments": self.reply_long_max_segments,
             "reply_segment_delay_seconds": self.reply_segment_delay_seconds,
             "reply_strip_final_periods": self.reply_strip_final_periods,
             "command_state_path": self.command_state_path or "(memory)",
             "agent_task_store_path": self.agent_task_store_path or "(memory)",
+            "agent_state_store_path": self.agent_state_store_path or self.agent_task_store_path or "data/agent_conversation_tasks.sqlite3",
+            "trace_store_path": self.trace_store_path or "(beside task state; bounded metadata only)",
             "runtime_extension_module": self.runtime_extension_module or "(none)",
+            "async_agent_enabled": self.async_agent_enabled,
+            "async_queue_limit": self.async_queue_limit,
+            "task_budget": {"max_requests": self.task_max_model_requests, "max_tokens": self.task_max_tokens,
+                            "max_tools": self.task_max_tools, "max_active_seconds": self.task_max_active_seconds},
         }
 
     def validation_errors(self) -> tuple[str, ...]:
@@ -160,6 +173,11 @@ class QQAgentConfig:
             errors.append("approval_ttl_seconds_invalid")
         if not 0.0 <= self.temperature <= 1.0:
             errors.append("temperature_invalid")
+        if not 1 <= self.async_queue_limit <= 64:
+            errors.append("async_queue_limit_invalid")
+        if not (1 <= self.task_max_model_requests <= 1000 and 1000 <= self.task_max_tokens <= 10000000
+                and 1 <= self.task_max_tools <= 128 and 1 <= self.task_max_active_seconds <= 86400):
+            errors.append("task_budget_invalid")
         return tuple(errors)
 
 
@@ -167,6 +185,11 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
     """读取独立 ``SHINKU_*`` 配置，不兼容旧项目键名。"""
 
     env = os.environ if environ is None else environ
+    def budget_number(key, default, cast=int):
+        try:
+            return cast(env.get(key, default))
+        except (ValueError, TypeError):
+            return default
     raw_rounds = str(env.get("SHINKU_QQ_AGENT_MAX_ROUNDS", "6") or "6").strip()
     try:
         max_rounds = int(raw_rounds)
@@ -202,16 +225,6 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         reply_max_segment_chars = int(raw_reply_max_chars)
     except ValueError:
         reply_max_segment_chars = 600
-    raw_reply_short_max = str(env.get("SHINKU_QQ_REPLY_SHORT_MAX_SEGMENTS", "2") or "2").strip()
-    try:
-        reply_short_max_segments = int(raw_reply_short_max)
-    except ValueError:
-        reply_short_max_segments = 2
-    raw_reply_long_max = str(env.get("SHINKU_QQ_REPLY_LONG_MAX_SEGMENTS", "4") or "4").strip()
-    try:
-        reply_long_max_segments = int(raw_reply_long_max)
-    except ValueError:
-        reply_long_max_segments = 4
     raw_reply_delay = str(env.get("SHINKU_QQ_REPLY_SEGMENT_DELAY_SECONDS", "0") or "0").strip()
     try:
         reply_segment_delay_seconds = float(raw_reply_delay)
@@ -221,6 +234,10 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         env.get("SHINKU_QQ_REPLY_STRIP_FINAL_PERIODS", "true"),
         default=True,
     )
+    try:
+        async_queue_limit = int(str(env.get("SHINKU_QQ_AGENT_ASYNC_QUEUE_LIMIT", "8") or "8"))
+    except ValueError:
+        async_queue_limit = 8
     return QQAgentConfig(
         enabled=_flag(env.get("SHINKU_QQ_AGENT_ENABLED")),
         send_enabled=_flag(env.get("SHINKU_QQ_AGENT_SEND_ENABLED")),
@@ -243,13 +260,19 @@ def load_qq_agent_config(environ: Mapping[str, str] | None = None) -> QQAgentCon
         reply_host_enabled=_flag(env.get("SHINKU_QQ_REPLY_HOST_ENABLED", "true"), default=True),
         reply_long_trigger_chars=reply_long_trigger_chars,
         reply_max_segment_chars=reply_max_segment_chars,
-        reply_short_max_segments=reply_short_max_segments,
-        reply_long_max_segments=reply_long_max_segments,
         reply_segment_delay_seconds=max(0.0, min(10.0, reply_segment_delay_seconds)),
         reply_strip_final_periods=reply_strip_final_periods,
         command_state_path=str(env.get("SHINKU_QQ_COMMAND_STATE_PATH", "") or "").strip(),
         agent_task_store_path=str(env.get("SHINKU_QQ_AGENT_TASKS_DB_PATH", "") or "").strip(),
+        agent_state_store_path=str(env.get("SHINKU_QQ_AGENT_STATE_DB_PATH", "") or "").strip(),
+        trace_store_path=str(env.get("SHINKU_QQ_TRACE_STORE_PATH", "") or "").strip(),
         runtime_extension_module=str(env.get("SHINKU_RUNTIME_EXTENSION_MODULE", "") or "").strip(),
+        async_agent_enabled=_flag(env.get("SHINKU_QQ_AGENT_ASYNC_ENABLED")),
+        async_queue_limit=async_queue_limit,
+        task_max_model_requests=budget_number("SHINKU_QQ_AGENT_TASK_MAX_MODEL_REQUESTS", 120),
+        task_max_tokens=budget_number("SHINKU_QQ_AGENT_TASK_MAX_TOKENS", 600000),
+        task_max_tools=budget_number("SHINKU_QQ_AGENT_TASK_MAX_TOOLS", 128),
+        task_max_active_seconds=budget_number("SHINKU_QQ_AGENT_TASK_MAX_ACTIVE_SECONDS", 1800.0, float),
     )
 
 
@@ -278,6 +301,7 @@ class QQAgentAssembly:
             "config": self.config.diagnostics(),
             "persona": self.persona.diagnostics(),
             "sender_mode": "enabled" if self.bridge.sender is not None else "dry_run",
+            "voice_renderer": "enabled" if self.bridge.voice_renderer is not None else "disabled",
             "chat_flow": self.bridge.chat_flow.diagnostics(),
             "task_coordinator": {
                 "enabled": True,
@@ -309,6 +333,7 @@ def assemble_qq_agent(
     config: QQAgentConfig,
     *,
     sender: QQMessageSender | None = None,
+    group_delivery_observer: Callable[[str, tuple[str, ...], tuple[str, ...], bool, float], None] | None = None,
     runtime: ChatRuntime | None = None,
     tool_host: ToolHost | None = None,
     allowed_tool_names: set[str] | None = None,
@@ -363,6 +388,10 @@ def assemble_qq_agent(
                 max_query_chars=memory_policy.max_query_chars,
             ),
             policy=memory_policy,
+            lifecycle_reviewer=(
+                LLMLifecycleReviewer(runtime)
+                if memory_policy.lifecycle.semantic_review_enabled else None
+            ),
         )
         if embedding_build.provider is not None and memory_service.store.semantic_enabled:
             memory_service.store.start_embedding_worker(
@@ -378,7 +407,9 @@ def assemble_qq_agent(
     if memory_service is not None and effective_tool_host.registry.get("memory_search") is None:
         effective_tool_host.registry.register(MemorySearchTool(memory_service), name="memory_search")
     task_coordinator = AgentTaskCoordinator(
-        state_path=config.agent_task_store_path or None,
+        state_path=config.agent_task_store_path or (config.agent_state_store_path or "data/agent_background_tasks.sqlite3" if config.async_agent_enabled else None),
+        max_workers=1 if config.async_agent_enabled else 2,
+        max_pending_tasks=config.async_queue_limit,
     )
 
     def self_state_provider(*, refresh: bool = False) -> Mapping[str, object]:
@@ -392,6 +423,8 @@ def assemble_qq_agent(
             "persona": persona.diagnostics(),
             "agent": {
                 "max_rounds": config.max_rounds,
+                "async_agent_enabled": config.async_agent_enabled,
+                "async_queue_limit": config.async_queue_limit,
                 "history_turns": config.history_turns,
                 "recent_context_messages": config.recent_context_messages,
                 "sender_configured": bool(config.send_enabled and sender is not None),
@@ -417,22 +450,42 @@ def assemble_qq_agent(
     risk_by_tool = dict(effective_policy.risk_by_tool)
     risk_by_tool.setdefault("memory_search", "low")
     risk_by_tool.setdefault("read_self_state", "low")
+    if extension is not None:
+        risk_by_tool.setdefault("private_browser_status", "low")
+        risk_by_tool.setdefault("private_browser_setup", "high")
+    for name, handler in effective_tool_host.registry.view().items():
+        if (
+            str(getattr(handler, "agent_permission_class", "") or "").strip().casefold() == "read"
+            and str(getattr(handler, "agent_progress_class", "") or "").strip().casefold() == "observe"
+            and not getattr(handler, "agent_research_candidate_field", "")
+            and not getattr(handler, "agent_research_content_field", "")
+            and not getattr(handler, "agent_evidence_collection_field", "")
+        ):
+            risk_by_tool.setdefault(name, "low")
     effective_policy = replace(effective_policy, risk_by_tool=risk_by_tool)
     reply_host = ReplyHost(
         enabled=config.reply_host_enabled,
         long_trigger_chars=config.reply_long_trigger_chars,
         max_segment_chars=config.reply_max_segment_chars,
-        short_max_segments=config.reply_short_max_segments,
-        long_max_segments=config.reply_long_max_segments,
         strip_final_periods=config.reply_strip_final_periods,
     )
     command_state = QQCommandState.from_environment(state_path=config.command_state_path)
+    voice_renderer = None
+    if extension is not None and _flag(os.environ.get("SHINKU_VOICE_ENABLED")):
+        from shinku_private.voice import PrivateVoiceRenderer
+
+        voice_renderer = PrivateVoiceRenderer.from_environment()
     bot_ids = _csv_values(os.environ.get("SHINKU_QQ_BOT_IDS", ""))
     chat_flow = ChatFlowController.from_environment()
     system_prompt = persona.text
     command_interpreter = None
     if extension is not None:
         try:
+            extension.bind_runtime(
+                registry=effective_tool_host.registry, runtime=runtime,
+                permission_provider=command_state.permission_mode,
+                enabled_provider=command_state.is_agent_enabled,
+            )
             system_prompt = extension.augment_system_prompt(prompt=system_prompt, config=config)
             command_interpreter = extension.build_command_interpreter(
                 state=command_state,
@@ -449,6 +502,8 @@ def assemble_qq_agent(
         runtime=runtime,
         system_prompt=system_prompt,
         sender=sender if config.send_enabled else None,
+        group_delivery_observer=group_delivery_observer,
+        voice_renderer=voice_renderer,
         tool_host=effective_tool_host,
         allowed_tool_names=allowed_tool_names,
         build_user_prompt=build_user_prompt,
@@ -471,6 +526,17 @@ def assemble_qq_agent(
         chat_flow=chat_flow,
         self_state_provider=self_state_provider,
         task_controller=task_coordinator.control,
+        task_store=AgentTaskStore(
+            config.agent_state_store_path or config.agent_task_store_path or "data/agent_conversation_tasks.sqlite3",
+        ),
+        task_contract_enabled=True,
+        trace_store=TurnTraceStore(path=config.trace_store_path or str(Path(
+            config.agent_state_store_path or config.agent_task_store_path or "data/agent_conversation_tasks.sqlite3",
+        ).with_name("qq_turn_traces.json"))),
+        task_coordinator=task_coordinator,
+        async_agent_enabled=config.async_agent_enabled,
+        task_budget_limits={"max_requests": config.task_max_model_requests, "max_tokens": config.task_max_tokens,
+                            "max_tools": config.task_max_tools, "max_active_seconds": config.task_max_active_seconds},
     )
     return QQAgentAssembly(
         config=config,

@@ -144,6 +144,16 @@ class CachedEmbeddingProvider(BaseEmbeddingProvider):
     def collection_key(self) -> str:
         return self.inner.collection_key()
 
+    def clear_cache(self) -> None:
+        """Drop derived vectors AND plaintext cache keys on explicit forgetting."""
+        with self._guard:
+            self._stored.clear()
+
+    def forget_texts(self, texts: Iterable[str]) -> None:
+        with self._guard:
+            for text in texts:
+                self._stored.pop(str(text), None)
+
     def embed_text(self, text: str) -> list[float]:
         raw = str(text or "")
         if self.max_entries <= 0:

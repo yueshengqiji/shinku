@@ -309,7 +309,7 @@ class IncomingMessage:
             embedded_quote.setdefault("message_id", _reply_id_from_segments(segments))
             embedded_quote.setdefault("conversation_type", conversation_type)
             embedded_quote.setdefault("conversation_id", conversation_id)
-            embedded_quote.setdefault("user_id", sender_id)
+            # An omitted original author is unknown, not the current quoter.
             try:
                 quoted_message = cls.from_event(embedded_quote).as_dict()
             except (TypeError, ValueError):
@@ -329,6 +329,56 @@ class IncomingMessage:
     @property
     def text(self) -> str:
         return "".join(segment.text for segment in self.segments if segment.kind in {"text", "at", "face", "poke"})
+
+    @property
+    def has_at_mention(self) -> bool:
+        return any(segment.kind == "at" for segment in self.segments)
+
+    @property
+    def text_without_at_mentions(self) -> str:
+        """Message body without the target labels carried by OneBot ``at`` segments."""
+
+        return "".join(
+            segment.text
+            for segment in self.segments
+            if segment.kind in {"text", "face", "poke"}
+        )
+
+    @property
+    def at_target_labels(self) -> tuple[str, ...]:
+        """Human-readable @ targets, falling back to the QQ ID when no name is present."""
+
+        return tuple(label for _, label in self.at_targets)
+
+    @property
+    def at_target_ids(self) -> tuple[str, ...]:
+        """Stable QQ identities for @ targets, kept in the same order as labels."""
+
+        return tuple(identifier for identifier, _ in self.at_targets)
+
+    @property
+    def at_targets(self) -> tuple[tuple[str, str], ...]:
+        """Pairs of target ID and display label for attribution-sensitive paths."""
+
+        targets: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for segment in self.segments:
+            if segment.kind != "at":
+                continue
+            payload = segment.payload if isinstance(segment.payload, Mapping) else {}
+            data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
+            target = ""
+            for source in (data, payload):
+                target = _first_text(source, "qq", "target", "user_id", "userId", "id")
+                if target:
+                    break
+            label = str(segment.text or "").strip().lstrip("@").strip()
+            display = label or (f"QQ {target}" if target else "未知成员")
+            key = target or display.casefold()
+            if key not in seen:
+                seen.add(key)
+                targets.append((target, display))
+        return tuple(targets)
 
     @property
     def attachments(self) -> tuple[dict[str, str], ...]:
@@ -450,7 +500,14 @@ def _embedded_quote_event(segments: Sequence[MessageSegment]) -> dict[str, Any]:
                 value = source.get(key)
                 if value in (None, "", []):
                     continue
-                if isinstance(value, Mapping):
-                    return dict(value)
-                return {"message": value} if key != "raw_message" else {"raw_message": value}
+                quoted = dict(value) if isinstance(value, Mapping) else (
+                    {"message": value} if key != "raw_message" else {"raw_message": value}
+                )
+                # NapCat can put original-author metadata next to the quoted
+                # segment list rather than inside it. Keep that provenance.
+                for origin in (data, segment.payload):
+                    for field_name in ("sender_id", "user_id", "userId", "sender", "time", "message_id", "message_type", "group_id"):
+                        if field_name in origin:
+                            quoted.setdefault(field_name, origin[field_name])
+                return quoted
     return {}

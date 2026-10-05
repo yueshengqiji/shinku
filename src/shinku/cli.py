@@ -209,7 +209,16 @@ def _cmd_serve(service: str) -> int:
         if agent_config.enabled:
             try:
                 sender = napcat_host.send if agent_config.send_enabled else None
-                assembly = assemble_qq_agent(agent_config, sender=sender)
+                assembly = assemble_qq_agent(
+                    agent_config,
+                    sender=sender,
+                    group_delivery_observer=lambda group_id, recipients, ids, autonomous, sent_at: (
+                        napcat_host.ingress.note_group_reply(
+                            group_id, recipient_ids=recipients, message_ids=ids,
+                            autonomous=autonomous, at=sent_at,
+                        )
+                    ),
+                )
                 model_service_controller.attach_runtime(assembly.bridge.runtime)
             except (QQAgentConfigError, ValueError) as exc:
                 print(f"invalid enabled QQ Agent configuration: {exc}", file=sys.stderr)
@@ -223,6 +232,7 @@ def _cmd_serve(service: str) -> int:
             dispatcher = NapCatTurnDispatcher(
                 handler=assembly.bridge,
                 flush_batch=napcat_host.flush,
+                async_handler=True,
             )
             napcat_host.set_turn_dispatcher(dispatcher)
 

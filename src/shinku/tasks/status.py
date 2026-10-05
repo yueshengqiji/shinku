@@ -29,7 +29,7 @@ _WORKFLOW_ALIASES = {
 
 _WORKFLOW_EDGES: Mapping[str, frozenset[str]] = {
     "queued": frozenset({"queued", "running", "waiting_user", "blocked", "completed", "failed", "canceled", "cleaned"}),
-    "running": frozenset({"running", "waiting_user", "blocked", "completed", "failed", "canceled", "cleaned"}),
+    "running": frozenset({"running", "queued", "waiting_user", "blocked", "completed", "failed", "canceled", "cleaned"}),
     "waiting_user": frozenset({"waiting_user", "queued", "running", "blocked", "completed", "failed", "canceled", "cleaned"}),
     "blocked": frozenset({"blocked", "queued", "running", "waiting_user", "completed", "failed", "canceled", "cleaned"}),
     "completed": frozenset({"completed", "cleaned"}),

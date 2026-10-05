@@ -31,6 +31,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+documents = [
+    "pypdf>=6.10,<7",
+    "reportlab>=4.4.9,<5",
+]
 dev = [
     "pytest",
     "httpx",

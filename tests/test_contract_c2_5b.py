@@ -178,10 +178,10 @@ class NativeCallTests(unittest.TestCase):
         self.assertEqual(result["url"], "https://x/1.png")
         self.assertEqual(result["_tool_invocation_id"], "call-stream")
 
-    def test_bad_tool_arguments_become_empty_object(self) -> None:
+    def test_bad_tool_arguments_remain_invalid_not_an_empty_object(self) -> None:
         runtime = _runtime()
-        self.assertEqual(runtime._decode_tool_args("not-json"), {})
-        self.assertEqual(runtime._decode_tool_args([1, 2]), {})
+        self.assertIsNone(runtime._decode_tool_args("not-json"))
+        self.assertIsNone(runtime._decode_tool_args([1, 2]))
 
 
 class MediaAndThinkingTests(unittest.TestCase):

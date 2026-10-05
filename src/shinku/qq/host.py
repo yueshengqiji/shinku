@@ -48,6 +48,10 @@ class NapCatHostResult:
                         "source_kind": item.source_kind,
                         "reference": item.reference,
                         "ready": item.ready,
+                        "source_message_id": item.source_message_id,
+                        "source_sender_id": item.source_sender_id,
+                        "source_sender_label": item.source_sender_label,
+                        "reference_kind": item.reference_kind,
                     }
                     for item in self.visual.inputs
                 ],
@@ -240,6 +244,8 @@ class NapCatHost:
     def send(self, message: OutgoingMessage) -> DeliveryResult:
         if self.transport is None:
             return DeliveryResult(False, "transport_unconfigured", error="napcat_transport_unconfigured")
+        if str(message.conversation_type or "").lower() not in {"private", "group"}:
+            return DeliveryResult(True, "desktop_delivered")
         return deliver(self.transport, message)
 
     def _maybe_send_welcome(self, message: IncomingMessage, at: float) -> DeliveryResult | None:

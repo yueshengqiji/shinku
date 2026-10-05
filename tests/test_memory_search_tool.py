@@ -130,7 +130,8 @@ class MemorySearchToolTests(unittest.TestCase):
                 policy=ExecutionPolicy(risk_by_tool={"memory_search": "low"}),
             )
             result = bridge.handle_turn(_turn())
-            self.assertEqual((result.agent_status, result.final_text), ("completed", "我看过了。"))
+            self.assertEqual(result.agent_status, "partial")
+            self.assertIn("没找到", result.final_text)
             self.assertEqual(runtime.calls, 2)
 
     def test_date_recall_uses_a_day_range_and_sees_both_sides_of_chat(self) -> None:

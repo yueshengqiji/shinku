@@ -134,39 +134,45 @@ class IngressPolicy:
                     seen.pop(key, None)
             if transport_event and fingerprint in seen:
                 return IngressAdmission(False, "duplicate_event", fingerprint)
+            # Keep validation and reservation in the same critical section.
+            # Previously the lock was released after the first duplicate check
+            # and reacquired only to write ``seen``. Two webhook worker threads
+            # could therefore both observe a missing fingerprint and schedule
+            # the same NapCat event before either one recorded it.
+            raw = message.raw_event if isinstance(message.raw_event, Mapping) else {}
+            group_id = str(
+                raw.get("group_id")
+                or (message.conversation_id if message.conversation_type == "group" else "")
+            ).strip()
+            sender_id = str(message.sender_id or "").strip()
+            if group_id and group_id in self.ignored_group_ids:
+                return IngressAdmission(False, "ignored_group", fingerprint)
+            if sender_id and sender_id in self.ignored_user_ids:
+                return IngressAdmission(False, "ignored_user", fingerprint)
 
-        raw = message.raw_event if isinstance(message.raw_event, Mapping) else {}
-        group_id = str(raw.get("group_id") or (message.conversation_id if message.conversation_type == "group" else "")).strip()
-        sender_id = str(message.sender_id or "").strip()
-        if group_id and group_id in self.ignored_group_ids:
-            return IngressAdmission(False, "ignored_group", fingerprint)
-        if sender_id and sender_id in self.ignored_user_ids:
-            return IngressAdmission(False, "ignored_user", fingerprint)
+            self_id = str(raw.get("self_id") or raw.get("selfId") or "").strip()
+            sender = raw.get("sender") if isinstance(raw.get("sender"), Mapping) else {}
+            raw_sender_id = str(
+                raw.get("user_id") or raw.get("sender_id") or sender.get("user_id") or sender.get("userId") or ""
+            ).strip()
+            if self.ignore_self_events and self_id and sender_id and sender_id == self_id:
+                return IngressAdmission(False, "self_event", fingerprint)
+            if self.ignore_self_events and self_id and raw_sender_id and raw_sender_id == self_id:
+                return IngressAdmission(False, "self_event", fingerprint)
 
-        self_id = str(raw.get("self_id") or raw.get("selfId") or "").strip()
-        sender = raw.get("sender") if isinstance(raw.get("sender"), Mapping) else {}
-        raw_sender_id = str(
-            raw.get("user_id") or raw.get("sender_id") or sender.get("user_id") or sender.get("userId") or ""
-        ).strip()
-        if self.ignore_self_events and self_id and sender_id and sender_id == self_id:
-            return IngressAdmission(False, "self_event", fingerprint)
-        if self.ignore_self_events and self_id and raw_sender_id and raw_sender_id == self_id:
-            return IngressAdmission(False, "self_event", fingerprint)
+            if (
+                not message.is_poke
+                and not self.allow_stale_events
+                and message.timestamp is not None
+                and self.event_max_age_seconds > 0
+                and current - float(message.timestamp) > self.event_max_age_seconds
+            ):
+                return IngressAdmission(False, "stale_event", fingerprint)
 
-        if (
-            not message.is_poke
-            and not self.allow_stale_events
-            and message.timestamp is not None
-            and self.event_max_age_seconds > 0
-            and current - float(message.timestamp) > self.event_max_age_seconds
-        ):
-            return IngressAdmission(False, "stale_event", fingerprint)
-
-        if transport_event:
-            with lock:
+            if transport_event:
                 seen[fingerprint] = current
                 if len(seen) > self.dedup_max_entries:
                     excess = len(seen) - self.dedup_max_entries
                     for key, _ in sorted(seen.items(), key=lambda item: item[1])[:excess]:
                         seen.pop(key, None)
-        return IngressAdmission(True, "accepted", fingerprint)
+            return IngressAdmission(True, "accepted", fingerprint)

@@ -169,11 +169,14 @@ class ReplyRoutePolicy:
         return configured
 
     def _poke_targets_bot(self, message: IncomingMessage) -> bool:
-        target = message.raw_event.get("target_id", message.raw_event.get("targetId"))
-        target_text = str(target or "").strip()
-        if not target_text:
+        targets = {str(message.raw_event.get(key) or "").strip()
+                   for key in ("target_id", "targetId")
+                   if str(message.raw_event.get(key) or "").strip()}
+        # Match the decoder's nonempty alias handling, but fail closed when
+        # two aliases contradict each other instead of guessing ownership.
+        if len(targets) != 1:
             return False
-        return target_text in self._effective_bot_ids(message)
+        return next(iter(targets)) in self._effective_bot_ids(message)
 
     @staticmethod
     def _reply_target_id(message: IncomingMessage) -> str:
@@ -197,6 +200,12 @@ class ReplyRoutePolicy:
             if normalized == name or normalized.startswith(name + " "):
                 return True
             if normalized.startswith(name) and len(normalized) > len(name) and normalized[len(name)] in "，,：:、!?！？。":
+                return True
+            # Chinese vocatives naturally omit punctuation. A second-person
+            # continuation is directed speech; a possessive/name mention is not.
+            if normalized.startswith(name) and re.match(
+                r"(?:你|您|在吗|在不在|有空吗|怎么看|能不能|可以帮|帮我|帮忙|回答一下|说说)", normalized[len(name):],
+            ):
                 return True
         return False
 

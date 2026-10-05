@@ -10,7 +10,7 @@
 - `SHINKU_NAPCAT_BASE_URL`：OneBot HTTP action 根地址，例如 `http://127.0.0.1:3000`；
 - `SHINKU_NAPCAT_ACCESS_TOKEN`：可选，直接 token；
 - `SHINKU_NAPCAT_ACCESS_TOKEN_FILE`：可选，token 文件路径，直接 token 优先；
-- `SHINKU_NAPCAT_TIMEOUT`：HTTP 超时秒数，默认 10。
+- `SHINKU_NAPCAT_TIMEOUT`：HTTP action 超时秒数，默认 30；超时不自动重发，避免 NapCat 已发送但响应延迟时产生重复消息。
 
 ## 契约
 

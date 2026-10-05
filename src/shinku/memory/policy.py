@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Mapping
+
+from .lifecycle_policy import LifecyclePolicy
 
 __all__ = ["MemoryPolicy"]
 
@@ -70,6 +72,12 @@ class MemoryPolicy:
     recent_render_total_chars: int = 1800
     passive_observe_group: bool = True
     passive_observe_private: bool = False
+    # Detailed Agent archives are owner-only, bounded, and shorter-lived than
+    # the durable index cards that point to them.
+    agent_task_detail_enabled: bool = True
+    agent_task_detail_ttl_seconds: int = 30 * 86400
+    agent_task_detail_max_records: int = 500
+    agent_task_detail_max_steps: int = 32
     # The private owner memory is opt-in and only accepts these QQ identities.
     # It is deliberately separate from the command-authorisation list.
     master_user_ids: tuple[str, ...] = ()
@@ -84,11 +92,21 @@ class MemoryPolicy:
     semantic_backfill_batch_size: int = 128
     semantic_index_interval_seconds: float = 3.0
     semantic_min_score: float = 0.22
+    # Stage B is source-complete but not production-enabled by default.
+    search_keys_enabled: bool = False
+    current_understanding_enabled: bool = False
+    evidence_package_enabled: bool = False
+    evidence_max_queries: int = 8
+    history_needs_enabled: bool = False
+    workbench_ttl_seconds: int = 300
+    workbench_max_entries: int = 128
+    lifecycle: LifecyclePolicy = field(default_factory=LifecyclePolicy)
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "MemoryPolicy":
         env = os.environ if environ is None else environ
         return cls(
+            lifecycle=LifecyclePolicy.from_environment(env),
             event_ttl_seconds=_int_value(env, "SHINKU_MEMORY_EVENT_TTL_SECONDS", 30 * 86400, minimum=0, maximum=10 * 365 * 86400),
             retrieval_limit=_int_value(env, "SHINKU_MEMORY_RETRIEVAL_LIMIT", 5, minimum=1, maximum=50),
             max_query_terms=_int_value(env, "SHINKU_MEMORY_MAX_QUERY_TERMS", 12, minimum=1, maximum=64),
@@ -106,6 +124,16 @@ class MemoryPolicy:
             recent_render_total_chars=_int_value(env, "SHINKU_MEMORY_RECENT_RENDER_TOTAL_CHARS", 1800, minimum=200, maximum=20000),
             passive_observe_group=_flag(env, "SHINKU_MEMORY_PASSIVE_OBSERVE_GROUP", True),
             passive_observe_private=_flag(env, "SHINKU_MEMORY_PASSIVE_OBSERVE_PRIVATE", False),
+            agent_task_detail_enabled=_flag(env, "SHINKU_MEMORY_AGENT_TASK_DETAIL_ENABLED", True),
+            agent_task_detail_ttl_seconds=_int_value(
+                env, "SHINKU_MEMORY_AGENT_TASK_DETAIL_TTL_SECONDS", 30 * 86400, minimum=3600, maximum=10 * 365 * 86400
+            ),
+            agent_task_detail_max_records=_int_value(
+                env, "SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_RECORDS", 500, minimum=1, maximum=10000
+            ),
+            agent_task_detail_max_steps=_int_value(
+                env, "SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_STEPS", 32, minimum=1, maximum=256
+            ),
             master_user_ids=_id_tuple(env, "SHINKU_MEMORY_MASTER_USER_IDS"),
             semantic_enabled=_flag(env, "SHINKU_MEMORY_SEMANTIC_ENABLED", False),
             semantic_provider=str(env.get("SHINKU_MEMORY_SEMANTIC_PROVIDER", "huggingface") or "huggingface").strip().lower() or "huggingface",
@@ -116,4 +144,11 @@ class MemoryPolicy:
             semantic_backfill_batch_size=_int_value(env, "SHINKU_MEMORY_SEMANTIC_BACKFILL_BATCH_SIZE", 128, minimum=8, maximum=1000),
             semantic_index_interval_seconds=_float_value(env, "SHINKU_MEMORY_SEMANTIC_INDEX_INTERVAL_SECONDS", 3.0, minimum=0.5, maximum=60.0),
             semantic_min_score=_float_value(env, "SHINKU_MEMORY_SEMANTIC_MIN_SCORE", 0.22, minimum=0.0, maximum=1.0),
+            search_keys_enabled=_flag(env, "SHINKU_MEMORY_SEARCH_KEYS_ENABLED", False),
+            current_understanding_enabled=_flag(env, "SHINKU_MEMORY_CURRENT_UNDERSTANDING_ENABLED", False),
+            evidence_package_enabled=_flag(env, "SHINKU_MEMORY_EVIDENCE_PACKAGE_ENABLED", False),
+            evidence_max_queries=_int_value(env, "SHINKU_MEMORY_EVIDENCE_MAX_QUERIES", 8, minimum=0, maximum=16),
+            history_needs_enabled=_flag(env, "SHINKU_MEMORY_HISTORY_NEEDS_ENABLED", False),
+            workbench_ttl_seconds=_int_value(env, "SHINKU_MEMORY_WORKBENCH_TTL_SECONDS", 300, minimum=1, maximum=3600),
+            workbench_max_entries=_int_value(env, "SHINKU_MEMORY_WORKBENCH_MAX_ENTRIES", 128, minimum=1, maximum=256),
         )

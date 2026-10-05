@@ -24,6 +24,22 @@ class RuntimeExtension:
     module_name: str
     module: ModuleType
 
+    def bind_runtime(self, **kwargs: Any) -> Any:
+        """Optional late binding after live command state exists; no saved grants."""
+        hook = getattr(self.module, "bind_runtime", None)
+        if hook is None:
+            return None
+        if not callable(hook):
+            raise RuntimeExtensionError("runtime_extension_bind_runtime_not_callable")
+        try:
+            return hook(**kwargs)
+        except RuntimeExtensionError:
+            raise
+        except Exception as exc:
+            raise RuntimeExtensionError(
+                f"runtime_extension_bind_runtime_failed:{type(exc).__name__}"
+            ) from exc
+
     def register_tools(self, *, registry: Any, config: Any) -> Any:
         hook = getattr(self.module, "register_tools", None)
         if hook is None:

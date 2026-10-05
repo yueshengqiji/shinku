@@ -14,6 +14,7 @@ B1 先提供 ``/health`` 与 ``/health/ready``；当前后端还挂载本机控�
 from __future__ import annotations
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -67,6 +68,34 @@ def create_app(
 ) -> FastAPI:
     resolved = settings or load_settings()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        bridge = getattr(qq_agent_assembly, "bridge", None)
+        memory_service = getattr(bridge, "memory_service", None)
+        memory_store = getattr(memory_service, "store", None)
+        lifecycle = getattr(memory_store, "lifecycle", None)
+        review = getattr(memory_service, "lifecycle_review", None)
+        review_start = getattr(review, "start", None)
+        if callable(review_start):
+            review_start()
+        starter = getattr(lifecycle, "start_worker", None)
+        if callable(starter):
+            starter()
+        try:
+            yield
+        finally:
+            # Close admission and signal cooperative cancellation before
+            # stopping services used by task handlers. In-flight blocking I/O
+            # cannot be forcefully preempted; reboot never replays handlers.
+            coordinator = agent_task_coordinator or getattr(qq_agent_assembly, "task_coordinator", None)
+            shutdown = getattr(coordinator, "shutdown", None)
+            if callable(shutdown):
+                shutdown(wait=False)
+            for owner, method in ((review, "stop"), (lifecycle, "stop_worker"), (memory_store, "stop_embedding_worker")):
+                closer = getattr(owner, method, None)
+                if callable(closer):
+                    closer()
+
     app = FastAPI(
         title="Shinku",
         version=__version__,
@@ -75,6 +104,7 @@ def create_app(
         # 关掉 schema 本身。只关 docs_url/redoc_url 是不够的——`/openapi.json` 仍会
         # 提供完整路由清单，等于把内部面暴露出来。这是干净环境验收实际测出来的缺口。
         openapi_url=None,
+        lifespan=lifespan,
     )
     app.state.settings = resolved
     app.include_router(build_observability_router(settings=resolved, assembly=qq_agent_assembly))

@@ -31,6 +31,10 @@ QQTurn
 - `SHINKU_MEMORY_MAX_QUERY_TERMS`：查询拆分的最大词项数；
 - `SHINKU_MEMORY_EVENT_SCAN_LIMIT` / `SHINKU_MEMORY_FACT_SCAN_LIMIT`：数据库候选扫描范围；
 - `SHINKU_MEMORY_EVENT_TTL_SECONDS`：短期事件的保留时间；设为 `0` 表示不自动过期；
+- `SHINKU_MEMORY_AGENT_TASK_DETAIL_ENABLED`：是否保存主人 Agent 任务的有界过程档案；
+- `SHINKU_MEMORY_AGENT_TASK_DETAIL_TTL_SECONDS` / `SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_RECORDS`：
+  过程档案默认保留 30 天、最多保留 500 条；超过期限或容量的旧详情会停止检索，摘要卡片不受影响；
+- `SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_STEPS`：每个任务最多保留多少个工具步骤，默认 32；
 - `SHINKU_MEMORY_MASTER_USER_IDS`：私人版主人 QQ 号列表；启用后会建立独立的
   `private:master` 主人记忆层，只有主人本人发起、且真红实际参与的对话才会复制进去；
 - `SHINKU_MEMORY_DETERMINISTIC_GUARDS`：是否启用明确回忆/短闲聊等确定性捷径。关闭后，
@@ -53,6 +57,7 @@ QQTurn
 - 主人记忆：`private:master` 是跨私聊/群聊的逻辑独立库。群聊旁观记录仍留在原群作用域；
   只有主人本人请求回忆时才会把主人库加入 `retrieve`/`summary` 检索，其他成员永远不能读取。
 - 主人库过滤：主人参与但真红没有介入的群聊不会进入主人库；其他成员之间的旁观聊天也不会进入。
+- Agent 任务记忆：主人任务摘要长期保留；过程详情仅保存工具顺序、工具名、执行状态和轮数，不保存原始参数、原始工具输出或模型思维过程；详情只对主人开放，并按 TTL/容量清理。显式遗忘/重置同样作用于主人库。
 - 遗忘日志：记录撤销动作，避免已撤销内容重新被恢复。
 
 ## 私人版语义检索
@@ -112,3 +117,48 @@ python scripts/check_shinku_memory.py `
 ```
 
 它应当同时满足：普通聊天不检索、明确回忆触发检索、检索结果带来源。
+
+## 分层生命周期（2026-10-01 源码能力，非线上启用声明）
+
+实现入口为 `memory/lifecycle.py`、`lifecycle_policy.py`、`lifecycle_review.py`。
+`memory_lifecycle` 是 SQLite 旁表；事件/事实仍是唯一内容来源，检索访问时间
+与有效强化证据分离。完整参数、风险映射、实测报告与上线门槛见
+[实施与验收报告](EBBINGHAUS_MEMORY_IMPLEMENTATION_2026-10-01.md)。
+
+- 新受管事件 L1 保存原文；有效重提/已送达回答的实际采用进入 L2。
+- 时间跨度、UTC 不同日、每日上限与请求去重共同控制长期晋级；默认
+  6 次、至少 4 天、跨度至少 14 天才提出 L3，不是同一轮连说 6 次。
+- L3/明确保护不自然过期；仍可主动撤销、更正，事实有效期不被晋级取消。
+- 等级和原文/摘要形态独立。冷却先降级，摘要只逐句抽取并校验数字、
+  否定/条件片段；校验失败保留原文，不自动用模型修补。摘要回收后标记
+  `raw_detail_unavailable`，再次晋级不能恢复已经移除的细节。
+- `shadow` 默认保持原等级、原文和旧 TTL，仅记录证据与方案；
+  `active` 接管受管事件的生命周期，普通扫描仍不删除索引原文。
+  回收还必须另给精确作用域和独立确认，不能只打开 active 就清旧库。
+- 自然改写/实质采用核验为独立 opt-in，使用现有 AUX 服务，来源、用户
+  和最终答案片段必须逐字绑定。仅检索、未送达答案、助手复述、第三方
+  引用、改口或无法确认作者的旧资料不累计。语义判断不提高事实可信度。
+- 同源的历史回合仍由原有审计保留策略管理；只回收记忆索引文本/向量
+  不会清除聊天记录或备份，也不等于 SQLite 文件缩小或磁盘安全擦除。
+
+所有字段可用 `.env.example` 中的 `SHINKU_MEMORY_LIFECYCLE_*` 配置。
+保留期是有效时间常数，不是保证在第 7/30 个自然日删除；空闲时间按
+0.08 加权，有交互后的一小时按全速累计，并要求至少 12 次后续交互。
+阈值修改开启新迁移宽限期，但不抹掉既有记忆年龄或冒充重复使用。
+
+本地管理接口（只允许本机，写请求需同源 JSON）：
+
+| 路径 | 边界 |
+| --- | --- |
+| `GET /memory/lifecycle?scope=private:...` | 元数据、模式、计数、预算/错误；不返回原文 |
+| `POST /memory/lifecycle/preview` | `{scope}`；事务回滚预览，无等级/年龄持久变更 |
+| `POST /memory/lifecycle/scan` | `{scope,confirm:true}`；不回收 |
+| 同上，授权回收 | 再需 `allow_reclaim:true`、`approved_scope` 等于 scope、`reclamation_confirmation:"RECLAIM_MEMORY_INDEX_RAW"` 和 active |
+| `POST /memory/lifecycle/protect` | 精确 `scope,record_id,pinned,confirm:true`；active 才能保护/解除，拒绝永久保护凭据 |
+| `POST /memory/lifecycle/correct-fact` | `scope,record_id,expected_hash,replacement,confirm:true`；仅当前事实，内容哈希 CAS，旧版撤销，历史原话不改写 |
+| `POST /memory/lifecycle/revoke-record` | `scope,record_id,confirm:true`；原文已回收、不能按旧词搜索时仍可明确撤销；不涉及日志删除 |
+
+恢复旧备份前需应用独立导出的撤销清单。辅助脚本 `gray_memory_lifecycle.py`
+支持只读基线、隔离回放及带确认的撤销导入；未经作用域确认不修改恢复库。
+`gray_memory_models.py --bge` 使用已缓存 CPU 模型、禁止下载；
+`--live-review` 单独使用现有模型核验虚构语料，不发送真实 QQ 记录。

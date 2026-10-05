@@ -69,7 +69,9 @@ class ToolHostGrayTests(unittest.TestCase):
         host = ToolHost(registry)
         runtime = GrayRuntime()
         result = host.run(runtime=runtime, system_prompt="agent", allowed_tool_names={"missing"})
-        self.assertEqual(result.status, "completed")
+        # An unregistered/failed call cannot support a successful handoff.
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.completion["accepted"])
         self.assertEqual(runtime.calls[0]["native_tools"], None)
         self.assertEqual(result.tool_envelopes[0].data["code"], "unknown_tool")
         self.assertEqual(registry.names(), ("search",))
@@ -82,7 +84,8 @@ class ToolHostGrayTests(unittest.TestCase):
             system_prompt="agent",
             policy=ExecutionPolicy(blocked=frozenset({"search"})),
         )
-        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.status, "failed")
+        self.assertFalse(result.completion["accepted"])
         self.assertEqual(result.tool_envelopes[0].data["code"], "tool_blocked")
 
     def test_runtime_capability_gate_prevents_false_tool_advertising(self) -> None:

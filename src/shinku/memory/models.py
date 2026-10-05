@@ -100,6 +100,8 @@ class MemoryContext:
     retrieved_count: int = 0
     injected_chars: int = 0
     audit: dict[str, Any] = field(default_factory=dict)
+    # Receipt-backed short dialogue is not a retrieval/voice-example candidate.
+    recent_dialogue: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -109,6 +111,7 @@ class MemoryContext:
             "retrieved_count": self.retrieved_count,
             "injected_chars": self.injected_chars,
             "audit": dict(self.audit),
+            "recent_dialogue": self.recent_dialogue,
         }
 
 

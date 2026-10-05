@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from .models import MemoryRecord
+from .lifecycle import MemoryLifecycle, SCHEMA as LIFECYCLE_SCHEMA
+from .lifecycle_policy import LifecyclePolicy
 from .semantic import cosine_similarity, pack_vector, unpack_vector
 
 __all__ = ["MemoryStore"]
@@ -45,6 +47,7 @@ class MemoryStore:
         semantic_min_score: float = 0.22,
         embedding_status: str = "configured",
         embedding_error: str = "",
+        lifecycle_policy: LifecyclePolicy | None = None,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +62,11 @@ class MemoryStore:
         self._embedding_worker: threading.Thread | None = None
         self._embedding_worker_stop = threading.Event()
         self._semantic_cleanup_done = False
+        self._l1_semantic_cache: dict[tuple[str, str, str, str], list[float]] = {}
+        self._forget_listeners: list[Any] = []
+        self.search_index = None
+        self.search_keys_enabled = False
+        self.search_keys_last_status: dict[str, Any] = {}
         self.configure(
             max_query_terms=max_query_terms,
             event_scan_limit=event_scan_limit,
@@ -66,6 +74,7 @@ class MemoryStore:
             max_results=max_results,
         )
         self._initialize()
+        self.lifecycle = MemoryLifecycle(self, lifecycle_policy)
 
     def configure(
         self,
@@ -136,7 +145,8 @@ class MemoryStore:
                     confidence REAL NOT NULL DEFAULT 0.8,
                     status TEXT NOT NULL DEFAULT 'active',
                     expires_at INTEGER NOT NULL DEFAULT 0,
-                    source_id TEXT NOT NULL DEFAULT ''
+                    source_id TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_fact_key
                     ON memory_facts(scope, fact_key);
@@ -188,6 +198,50 @@ class MemoryStore:
                     ON memory_embeddings(record_type, record_id, model_key);
                 """
             )
+
+            conn.executescript(LIFECYCLE_SCHEMA)
+            if "metadata_json" not in {row[1] for row in conn.execute("PRAGMA table_info(memory_facts)")}:
+                conn.execute("ALTER TABLE memory_facts ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
+
+    def configure_lifecycle(self, policy: LifecyclePolicy) -> None:
+        """Apply one versioned policy without deleting legacy history."""
+        self.lifecycle.stop_worker()
+        self.lifecycle.policy = policy
+        self._l1_semantic_cache.clear()
+
+    def on_forget(self, listener: Any) -> None:
+        if not callable(listener):
+            raise TypeError("forget_listener_must_be_callable")
+        self._forget_listeners.append(listener)
+
+    def configure_search_keys(self, *, enabled: bool) -> None:
+        if enabled and self.search_index is None:
+            from .search_index import MemorySearchIndex
+            try:
+                self.search_index = MemorySearchIndex(self)
+            except Exception as exc:
+                # A derived schema cannot take the source-only service down.
+                self.search_keys_enabled = False
+                self.search_keys_last_status = {"fallback": "source_search", "phase": "initialize",
+                                               "error_type": type(exc).__name__, "remote_calls": 0}
+                return
+        self.search_keys_enabled = bool(enabled)
+
+    def _clear_derived_caches(self, *, scope: str, record_ids: set[str]) -> None:
+        self._l1_semantic_cache.clear()
+        clear = getattr(self._embedding_provider, "clear_cache", None)
+        if callable(clear):
+            clear()
+        for listener in self._forget_listeners:
+            try:
+                listener(scope=scope, record_ids=record_ids)
+            except Exception:
+                continue
+
+    def _discard_cached_text(self, text: str) -> None:
+        forget = getattr(self._embedding_provider, "forget_texts", None)
+        if callable(forget):
+            forget([text[:6000]])
 
     @property
     def embedding_provider(self) -> Any | None:
@@ -317,7 +371,8 @@ class MemoryStore:
                     LEFT JOIN memory_embeddings e
                       ON e.record_type = 'event' AND e.record_id = m.event_id
                      AND e.model_key = ?
-                   WHERE m.status = 'active'{event_scope_clause}
+                   WHERE m.status = 'active'
+                     AND m.source_id NOT LIKE 'owner:agent-task-detail:%'{event_scope_clause}
                    ORDER BY m.created_at DESC LIMIT ?""",
                 (model_key, *scope_values, scan_limit),
             ).fetchall()
@@ -338,6 +393,9 @@ class MemoryStore:
         fresh_rows = []
         for row in rows:
             body = str(row["text"] or "")
+            with self._lock, self._connect() as conn:
+                if not self._embedding_allowed(conn, str(row["record_type"]), str(row["record_id"])):
+                    continue
             if body.strip() in {"[图片附件]", "[未解析消息]"}:
                 continue
             digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -356,6 +414,7 @@ class MemoryStore:
         stamp = int(time.time())
         written = 0
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             for row, vector in zip(rows, vectors):
                 values = [float(value) for value in (vector or [])]
                 if not values:
@@ -365,6 +424,14 @@ class MemoryStore:
                     continue
                 body = str(row["text"] or "")
                 content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                # Encoding ran outside the transaction. A forget, correction
+                # or raw reclamation during that time revokes this snapshot.
+                current = self.lifecycle._record(conn, str(row["record_type"]), str(row["record_id"]))
+                if current is None or current["status"] != "active" or str(current["scope"]) != str(row["scope"]) or hashlib.sha256(str(current["text"]).encode("utf-8")).hexdigest() != content_hash:
+                    self._discard_cached_text(body)
+                    continue
+                if not self._embedding_allowed(conn, str(row["record_type"]), str(row["record_id"])):
+                    continue
                 conn.execute(
                     """INSERT INTO memory_embeddings
                        (embedding_id, record_type, record_id, scope, model_key,
@@ -391,6 +458,17 @@ class MemoryStore:
                 )
                 written += 1
         return written
+
+    def _embedding_allowed(self, conn, record_type: str, record_id: str) -> bool:
+        policy = self.lifecycle.policy
+        if policy.mode != "active" or not policy.defer_l1_embeddings:
+            return True
+        state = conn.execute("SELECT tier,pinned FROM memory_lifecycle WHERE record_type=? AND record_id=?", (record_type, record_id)).fetchone()
+        if state is None:
+            row = self.lifecycle._record(conn, record_type, record_id)
+            if not self.lifecycle._eligible(row, record_type):
+                return True  # Unmanaged summaries/temporary layers keep their own indexing policy.
+        return record_type == "fact" or (state is not None and (state["tier"] >= 2 or state["pinned"]))
 
     @staticmethod
     def _json(value: Any) -> str:
@@ -528,6 +606,26 @@ class MemoryStore:
             return False
         stamp = int(created_at or time.time())
         with self._lock, self._connect() as conn:
+            if self.lifecycle.revoked(conn, scope=str(scope), source_id=str(source_id), text=body):
+                return False
+            meta = metadata if isinstance(metadata, dict) else {}
+            parents = meta.get("source_record_ids", [])
+            if not isinstance(parents, list) or len(parents) > 128:
+                return False
+            hashes = meta.get("source_content_hashes", {})
+            if not isinstance(hashes, dict):
+                return False
+            for parent_id in parents:
+                try:
+                    parent_type, parent_bare = self.lifecycle._identity(str(parent_id))
+                except ValueError:
+                    return False
+                parent = self.lifecycle._record(conn, parent_type, parent_bare)
+                if parent is None or parent["status"] != "active" or str(parent["scope"]) != str(scope):
+                    return False
+                expected = hashes.get(str(parent_id))
+                if expected and hashlib.sha256(str(parent["text"]).encode("utf-8")).hexdigest() != expected:
+                    return False
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO memory_events
@@ -549,7 +647,52 @@ class MemoryStore:
                     self._json(metadata),
                 ),
             )
+            if cursor.rowcount > 0 and self.lifecycle.policy.enabled:
+                row = conn.execute("SELECT * FROM memory_events WHERE source_id=?", (str(source_id),)).fetchone()
+                self.lifecycle._enroll(conn, "event", row, int(self.lifecycle.wall_time()))
             return cursor.rowcount > 0
+
+    def event_by_source_id(self, *, source_id: str, scope: str) -> MemoryRecord | None:
+        """Read one active event by its stable source key inside one scope."""
+
+        source = str(source_id or "").strip()
+        selected_scope = str(scope or "").strip()
+        if not source or not selected_scope:
+            return None
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_events WHERE source_id = ? AND scope = ? AND status = 'active' LIMIT 1",
+                (source, selected_scope),
+            ).fetchone()
+        return self._event_record(row, score=1.0) if row is not None else None
+
+    def prune_agent_task_details(self, *, scope: str, max_records: int) -> int:
+        """Forget the oldest active detail archives past the configured cap."""
+
+        selected_scope = str(scope or "").strip()
+        cap = max(1, int(max_records or 1))
+        if not selected_scope:
+            return 0
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT event_id FROM memory_events "
+                "WHERE scope = ? AND status = 'active' AND layer = 'episodic' "
+                "AND source_id LIKE 'owner:agent-task-detail:%' "
+                "ORDER BY created_at DESC, rowid DESC",
+                (selected_scope,),
+            ).fetchall()
+            forgotten_ids = [str(row["event_id"]) for row in rows[cap:]]
+            if not forgotten_ids:
+                return 0
+            conn.executemany(
+                "UPDATE memory_events SET status = 'forgotten' WHERE event_id = ?",
+                [(item,) for item in forgotten_ids],
+            )
+            conn.executemany(
+                "DELETE FROM memory_embeddings WHERE record_type = 'event' AND record_id = ?",
+                [(item,) for item in forgotten_ids],
+            )
+            return len(forgotten_ids)
 
     def promote_scope_to_owner(self, *, source_scope: str, owner_scope: str = "private:master") -> dict[str, int]:
         """Copy an already isolated private scope into the owner library.
@@ -572,6 +715,8 @@ class MemoryStore:
             ).fetchall()
             for row in event_rows:
                 source_id = f"owner:import:{row['source_id']}"
+                if self.lifecycle.revoked(conn, scope=owner_scope, source_id=source_id, text=row["text"]):
+                    continue
                 metadata = self._loads(row["metadata_json"])
                 metadata.update({"owner_memory": True, "owner_source_scope": source_scope, "owner_import": True})
                 cursor = conn.execute(
@@ -606,13 +751,19 @@ class MemoryStore:
                 key = str(row["fact_key"] or "").strip()
                 if not key:
                     continue
+                source_id = f"owner:import:{row['source_id']}"
+                if self.lifecycle.revoked(conn, scope=owner_scope, source_id=source_id, text=row["text"]):
+                    continue
+                prior = conn.execute("SELECT status,updated_at FROM memory_facts WHERE scope=? AND fact_key=?", (owner_scope, key)).fetchone()
+                if prior is not None and (prior["status"] != "active" or prior["updated_at"] >= row["updated_at"]):
+                    continue
                 cursor = conn.execute(
                     """
                     INSERT INTO memory_facts
                         (fact_id, conversation_id, scope, fact_key, text, created_at,
                          updated_at, last_used_at, importance, confidence, status,
-                         expires_at, source_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                         expires_at, source_id, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
                     ON CONFLICT(scope, fact_key) DO UPDATE SET
                         text=excluded.text,
                         conversation_id=excluded.conversation_id,
@@ -622,7 +773,8 @@ class MemoryStore:
                         confidence=excluded.confidence,
                         status='active',
                         expires_at=excluded.expires_at,
-                        source_id=excluded.source_id
+                        source_id=excluded.source_id,
+                        metadata_json=excluded.metadata_json
                     """,
                     (
                         uuid.uuid5(uuid.NAMESPACE_URL, f"owner:fact:{source_scope}:{key}").hex,
@@ -637,6 +789,7 @@ class MemoryStore:
                         float(row["confidence"] or 0.0),
                         int(row["expires_at"] or 0),
                         f"owner:import:{row['source_id']}",
+                        row["metadata_json"],
                     ),
                 )
                 copied_facts += max(0, int(cursor.rowcount))
@@ -654,15 +807,18 @@ class MemoryStore:
         confidence: float = 0.9,
         expires_at: int = 0,
         now: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         stamp = int(now or time.time())
         with self._lock, self._connect() as conn:
+            if self.lifecycle.revoked(conn, scope=str(scope), source_id=str(source_id), text=str(text).strip()):
+                return
             conn.execute(
                 """
                 INSERT INTO memory_facts
                     (fact_id, conversation_id, scope, fact_key, text, created_at, updated_at,
-                     importance, confidence, expires_at, source_id, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                     importance, confidence, expires_at, source_id, metadata_json, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
                 ON CONFLICT(scope, fact_key) DO UPDATE SET
                     text=excluded.text,
                     conversation_id=excluded.conversation_id,
@@ -671,6 +827,7 @@ class MemoryStore:
                     confidence=excluded.confidence,
                     expires_at=excluded.expires_at,
                     source_id=excluded.source_id,
+                    metadata_json=excluded.metadata_json,
                     status='active'
                 """,
                 (
@@ -685,8 +842,13 @@ class MemoryStore:
                     max(0.0, min(1.0, float(confidence))),
                     max(0, int(expires_at or 0)),
                     str(source_id),
+                    self._json(metadata or {}),
                 ),
             )
+
+            if self.lifecycle.policy.enabled:
+                row = conn.execute("SELECT * FROM memory_facts WHERE scope=? AND fact_key=?", (str(scope), str(fact_key))).fetchone()
+                self.lifecycle._enroll(conn, "fact", row, stamp)
 
     def search(
         self,
@@ -733,7 +895,9 @@ class MemoryStore:
             time_values.append(int(end_at))
         with self._lock, self._connect() as conn:
             event_rows = conn.execute(
-                f"SELECT * FROM memory_events WHERE scope = ? AND status = 'active'{layer_clause}{time_clause} ORDER BY created_at DESC LIMIT {self.event_scan_limit}",
+                f"SELECT * FROM memory_events WHERE scope = ? AND status = 'active' "
+                f"AND source_id NOT LIKE 'owner:agent-task-detail:%'{layer_clause}{time_clause} "
+                f"ORDER BY created_at DESC LIMIT {self.event_scan_limit}",
                 (str(scope), *layer_values, *time_values),
             ).fetchall()
             fact_rows = () if selected_layers or start_at is not None or end_at is not None else conn.execute(
@@ -789,6 +953,30 @@ class MemoryStore:
             if previous is None or is_hybrid or (not previous_is_hybrid and item.score > previous.score):
                 merged[item.record_id] = item
         candidates = list(merged.values())
+        if getattr(self, "search_keys_enabled", False) and self.search_index is not None:
+            try:
+                self.search_keys_last_status = self.search_index.rebuild(scope=str(scope), now=stamp, limit=self.event_scan_limit, dry_run=False)
+                matches = self.search_index.matches(records=candidates, query=query_text, scope=str(scope), now=stamp)
+            except Exception as exc:
+                matches = {}  # Source search still works if the derived index is unavailable.
+                self.search_keys_last_status = {"scope": str(scope), "fallback": "source_search", "error_type": type(exc).__name__, "remote_calls": 0}
+            candidates = [replace(item, score=item.score + min(0.30, 0.15 * len(matches[item.record_id])),
+                          metadata={**item.metadata, "search_hints": list(matches[item.record_id]),
+                                    "search_generator": "local-topic-hints-v1"})
+                          if item.record_id in matches else item for item in candidates]
+            # Bind ALL returned sources, not just boosted hits, to this reading version.
+            fresh_candidates = []
+            fresh_sources = self.search_index.read_sources(requests=tuple(
+                (item.record_id, str(scope), "") for item in candidates), now=stamp)
+            for item, fresh in zip(candidates, fresh_sources):
+                if (fresh is not None and fresh.text == item.text and fresh.source_id == item.source_id
+                        and fresh.created_at == item.created_at and fresh.layer == item.layer):
+                    # Never overwrite current provenance with an older candidate.
+                    diagnostics = {key: value for key, value in item.metadata.items()
+                                   if key in {"search_hints", "search_generator", "retrieval_method",
+                                              "semantic_similarity", "lexical_score"}}
+                    fresh_candidates.append(replace(fresh, score=item.score, metadata={**fresh.metadata, **diagnostics}))
+            candidates = fresh_candidates
         candidates.sort(key=lambda item: (item.score, item.importance, item.created_at), reverse=True)
         selected = candidates[: max(1, min(self.max_results, int(limit or 5)))]
         if selected:
@@ -844,12 +1032,13 @@ class MemoryStore:
             time_values.append(int(end_at))
         with self._lock, self._connect() as conn:
             event_rows = conn.execute(
-                f"""SELECT m.*, e.vector_blob, e.dimension
+                f"""SELECT m.*, e.vector_blob, e.dimension,e.content_hash AS indexed_hash
                     FROM memory_events m
                     JOIN memory_embeddings e
                       ON e.record_type = 'event' AND e.record_id = m.event_id
                      AND e.model_key = ?
                    WHERE m.scope = ? AND m.status = 'active'
+                     AND m.source_id NOT LIKE 'owner:agent-task-detail:%'
                      AND trim(m.text) NOT IN ('[图片附件]', '[未解析消息]'){layer_clause}{time_clause}
                    ORDER BY m.created_at DESC LIMIT ?""",
                 (model_key, scope, *layer_values, *time_values, self.event_scan_limit),
@@ -858,7 +1047,7 @@ class MemoryStore:
             if not selected_layers and start_at is None and end_at is None:
                 fact_rows = tuple(
                     conn.execute(
-                        """SELECT f.*, e.vector_blob, e.dimension
+                        """SELECT f.*, e.vector_blob, e.dimension,e.content_hash AS indexed_hash
                            FROM memory_facts f
                            JOIN memory_embeddings e
                              ON e.record_type = 'fact' AND e.record_id = f.fact_id
@@ -868,8 +1057,20 @@ class MemoryStore:
                         (model_key, scope, self.fact_scan_limit),
                     ).fetchall()
                 )
+            l1_rows = []
+            if self.lifecycle.policy.mode == "active" and self.lifecycle.policy.defer_l1_embeddings:
+                l1_rows = conn.execute(f"""SELECT m.* FROM memory_events m JOIN memory_lifecycle l
+                  ON l.record_type='event' AND l.record_id=m.event_id
+                  WHERE m.scope=? AND m.status='active' AND l.tier=1 AND l.pinned=0
+                  AND trim(m.text) NOT IN ('[图片附件]','[未解析消息]'){layer_clause}{time_clause}
+                  ORDER BY m.created_at DESC LIMIT 64""", (scope, *layer_values, *time_values)).fetchall()
         semantic: list[MemoryRecord] = []
         for row in event_rows:
+            with self._lock, self._connect() as conn:
+                if not self._embedding_allowed(conn, "event", str(row["event_id"])):
+                    continue
+            if hashlib.sha256(str(row["text"]).encode("utf-8")).hexdigest() != row["indexed_hash"]:
+                continue
             vector = unpack_vector(row["vector_blob"], dimension=int(row["dimension"] or 0))
             similarity = cosine_similarity(query_vector, vector)
             if similarity < self.semantic_min_score:
@@ -877,12 +1078,50 @@ class MemoryStore:
             lexical = self._score_event(row, terms, now, topic_batch_id=topic_batch_id, sender_id=sender_id)
             semantic.append(self._hybrid_record(lexical, similarity, terms=terms))
         for row in fact_rows:
+            if hashlib.sha256(str(row["text"]).encode("utf-8")).hexdigest() != row["indexed_hash"]:
+                continue
             vector = unpack_vector(row["vector_blob"], dimension=int(row["dimension"] or 0))
             similarity = cosine_similarity(query_vector, vector)
             if similarity < self.semantic_min_score:
                 continue
             lexical = self._score_fact(row, terms, now)
             semantic.append(self._hybrid_record(lexical, similarity, terms=terms))
+        # Batch the bounded recent L1 window. One encode per row made a cold
+        # 64-record recall disproportionately expensive on CPU.
+        missing = []
+        with self._lock:
+            for row in l1_rows:
+                content_hash = hashlib.sha256(str(row["text"]).encode("utf-8")).hexdigest()
+                key = (scope, str(row["event_id"]), model_key, content_hash)
+                if key not in self._l1_semantic_cache:
+                    missing.append((row, key, content_hash))
+        if missing:
+            try:
+                with self._embedding_lock:
+                    fresh_vectors = self._embedding_provider.embed_texts([str(row["text"])[:6000] for row, _, _ in missing])
+            except Exception:
+                fresh_vectors = []
+            with self._lock, self._connect() as conn:
+                for (row, key, content_hash), vector in zip(missing, fresh_vectors):
+                    current = self.lifecycle._record(conn, "event", str(row["event_id"]))
+                    if current is None or current["status"] != "active" or hashlib.sha256(str(current["text"]).encode("utf-8")).hexdigest() != content_hash:
+                        self._discard_cached_text(str(row["text"]))
+                        continue
+                    self._l1_semantic_cache[key] = list(vector)
+                while len(self._l1_semantic_cache) > 128:
+                    self._l1_semantic_cache.pop(next(iter(self._l1_semantic_cache)))
+        for row in l1_rows:
+            content_hash = hashlib.sha256(str(row["text"]).encode("utf-8")).hexdigest()
+            key = (scope, str(row["event_id"]), model_key, content_hash)
+            with self._lock:
+                vector = self._l1_semantic_cache.get(key)
+            if vector is None:
+                continue
+            similarity = cosine_similarity(query_vector, vector)
+            if similarity >= self.semantic_min_score:
+                lexical = self._score_event(row, terms, now, topic_batch_id=topic_batch_id, sender_id=sender_id)
+                match = self._hybrid_record(lexical, similarity, terms=terms)
+                semantic.append(replace(match, metadata={**match.metadata, "semantic_cache": "ephemeral_l1"}))
         return semantic
 
     @staticmethod
@@ -932,6 +1171,7 @@ class MemoryStore:
             rows = conn.execute(
                 f"""SELECT * FROM memory_events
                     WHERE scope = ? AND status = 'active'
+                      AND source_id NOT LIKE 'owner:agent-task-detail:%'
                       AND layer IN ({placeholders})
                       AND created_at >= ? AND created_at <= ?
                     ORDER BY ABS(created_at - ?) ASC, created_at DESC, event_id DESC
@@ -985,6 +1225,7 @@ class MemoryStore:
             rows = conn.execute(
                 f"""SELECT * FROM memory_events
                     WHERE scope = ? AND status = 'active'
+                      AND source_id NOT LIKE 'owner:agent-task-detail:%'
                       AND layer IN ({placeholders}) AND created_at >= ?
                     ORDER BY created_at DESC LIMIT ?""",
                 params,
@@ -1000,6 +1241,98 @@ class MemoryStore:
             if len(records) >= wanted:
                 break
         return records
+
+    def confirm_assistant_delivery(
+        self, *, scope: str, source_id: str, expected_text: str, delivered_at: int,
+        status: str = "sent", requester_name: str = "", proof_id: str = "",
+        content_complete: bool = False,
+    ) -> bool:
+        """Attach a transport receipt to an existing, active assistant source.
+
+        No new memory or raw speech is copied. Dry runs/total failures never
+        call this; partial sends prove occurrence, not the complete body.
+        """
+        if not scope.startswith("group:") or status not in {"sent", "partial"}:
+            return False
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM memory_events WHERE scope=? AND source_id=? AND status='active' AND layer='episodic'",
+                               (scope, source_id)).fetchone()
+            if row is None or row["text"] != expected_text or int(row["created_at"]) > delivered_at:
+                return False
+            meta = self._loads(row["metadata_json"])
+            if (meta.get("role") != "assistant" or meta.get("source") != "qq_turn"
+                    or not meta.get("self_id") or meta.get("sender_id") != meta.get("self_id")
+                    or not source_id.startswith(f"turn:{row['conversation_id']}:")
+                    or not source_id.endswith(":assistant")
+                    or self.lifecycle.revoked(conn, scope=scope, source_id=source_id, text=row["text"])):
+                return False
+            if meta.get("delivery_status") == "sent" and meta.get("delivery_proof") == "qq_transport":
+                return True
+            meta.update({"delivery_status": status, "delivered_at": int(delivered_at),
+                         "delivery_content_complete": bool(content_complete and status == "sent"),
+                         "delivery_proof": "qq_transport", "delivery_proof_id": str(proof_id)[:160]})
+            if requester_name:
+                meta["requester_name"] = str(requester_name).strip()[:80]
+            encoded = json.dumps(meta, ensure_ascii=False)
+            conn.execute("UPDATE memory_events SET metadata_json=? WHERE event_id=?", (encoded, row["event_id"]))
+            conn.execute("UPDATE memory_turns SET metadata_json=? WHERE scope=? AND source_id=? AND role='assistant'",
+                         (encoded, scope, source_id))
+            return True
+
+    def delivered_group_activity(
+        self, *, start_at: int, end_at: int, now: int, scope: str = "",
+        self_id: str = "", limit: int = 8,
+    ) -> list[MemoryRecord]:
+        """Candidates are ONLY the bot's receipt-backed group replies.
+
+        The service must authenticate private cross-group readers. No user
+        messages, observations, summaries, facts, or private turns are selected.
+        """
+        wanted = max(1, min(12, int(limit)))
+        scope_clause = " AND scope=?" if scope else ""
+        bot_clause = " AND json_extract(metadata_json,'$.self_id')=?" if self_id else ""
+        params = [int(start_at), int(end_at), int(now), *([scope] if scope else []),
+                  *([self_id] if self_id else []), min(96, wanted * 8)]
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("""SELECT * FROM memory_events
+                WHERE scope LIKE 'group:%' AND status='active' AND layer='episodic'
+                  AND json_extract(metadata_json,'$.role')='assistant'
+                  AND json_extract(metadata_json,'$.source')='qq_turn'
+                  AND json_extract(metadata_json,'$.delivery_proof')='qq_transport'
+                  AND json_extract(metadata_json,'$.delivery_status') IN ('sent','partial')
+                  AND json_extract(metadata_json,'$.delivered_at') BETWEEN ? AND ?
+                  AND (expires_at=0 OR expires_at>?)
+                  AND json_extract(metadata_json,'$.self_id') IS NOT NULL
+                  AND json_extract(metadata_json,'$.self_id') != ''
+                  AND json_extract(metadata_json,'$.sender_id')=json_extract(metadata_json,'$.self_id')
+                """ + scope_clause + bot_clause + " ORDER BY json_extract(metadata_json,'$.delivered_at') DESC,source_id DESC LIMIT ?", params).fetchall()
+            return [self._event_record(row, score=1.0) for row in rows
+                    if not self.lifecycle.revoked(conn, scope=row["scope"], source_id=row["source_id"], text=row["text"])][:wanted]
+
+    def recent_assistant_events(
+        self, *, scope: str, now: int, max_age_seconds: int = 1800, limit: int = 48
+    ) -> list[MemoryRecord]:
+        """Fetch Shinku's own active QQ replies for same-scope fact checking.
+
+        This is deliberately separate from ``recent_events``: generated replies
+        must not become general conversational or voice examples.
+        """
+
+        wanted = max(1, min(100, int(limit)))
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM memory_events
+                   WHERE scope = ? AND status = 'active' AND layer = 'episodic'
+                     AND created_at BETWEEN ? AND ?
+                     AND json_extract(metadata_json, '$.role') = 'assistant'
+                   ORDER BY created_at DESC LIMIT ?""",
+                (str(scope), int(now) - max(1, int(max_age_seconds)), int(now), wanted),
+            ).fetchall()
+        return [
+            self._event_record(row, score=0.0)
+            for row in rows
+            if str(self._loads(row["metadata_json"]).get("role") or "").lower() == "assistant"
+        ]
 
     def timeline(
         self,
@@ -1041,7 +1374,8 @@ class MemoryStore:
         with self._lock, self._connect() as conn:
             event_rows = conn.execute(
                 f"""SELECT * FROM memory_events
-                    WHERE scope = ? AND status = 'active'{layer_clause}{time_clause}
+                    WHERE scope = ? AND status = 'active'
+                      AND source_id NOT LIKE 'owner:agent-task-detail:%'{layer_clause}{time_clause}
                     ORDER BY created_at DESC, event_id DESC LIMIT ?""",
                 (str(scope), *layer_values, *time_values, scan),
             ).fetchall()
@@ -1119,7 +1453,8 @@ class MemoryStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT * FROM memory_events
-                   WHERE scope = ? AND status = 'active'{layer_clause}
+                   WHERE scope = ? AND status = 'active'
+                     AND source_id NOT LIKE 'owner:agent-task-detail:%'{layer_clause}
                    ORDER BY created_at ASC""",
                 (str(scope), *layers),
             ).fetchall()
@@ -1131,7 +1466,8 @@ class MemoryStore:
         created = 0
         for day, day_rows in grouped.items():
             lines: list[str] = []
-            for row in day_rows[: max(1, int(max_lines or 60))]:
+            included_rows = day_rows[: max(1, min(100, int(max_lines or 60)))]
+            for row in included_rows:
                 metadata = self._loads(row["metadata_json"])
                 role = str(metadata.get("role") or "").strip().lower()
                 sender = str(
@@ -1160,7 +1496,7 @@ class MemoryStore:
                 importance=0.62,
                 confidence=0.72,
                 expires_at=0,
-                metadata={"summary_day": day, "source": "local_daily_rollup", "observation_count": len(day_rows)},
+                metadata={"summary_day": day, "source": "local_daily_rollup", "observation_count": len(day_rows), "source_record_ids": [f"event:{row['event_id']}" for row in included_rows], "source_content_hashes": {f"event:{row['event_id']}": hashlib.sha256(str(row["text"]).encode("utf-8")).hexdigest() for row in included_rows}},
             ):
                 created += 1
         return created
@@ -1218,39 +1554,99 @@ class MemoryStore:
             importance=float(row["importance"] or 0.0),
             confidence=float(row["confidence"] or 0.0),
             source_id=str(row["source_id"] or ""),
-            metadata={"fact_key": str(row["fact_key"] or "")},
+            metadata={**(self._loads(row["metadata_json"]) if "metadata_json" in row.keys() else {}),
+                      "fact_key": str(row["fact_key"] or "")},
         )
 
     def expire(self, *, now: int | None = None) -> int:
         stamp = int(now or time.time())
         with self._lock, self._connect() as conn:
+            lifecycle_clause = " AND NOT (layer IN ('observation','episodic','legacy_raw','legacy_lesson') AND source_id NOT LIKE 'owner:agent-task-%')" if self.lifecycle.policy.mode == "active" else ""
             cursor = conn.execute(
-                """
+                f"""
                 UPDATE memory_events SET status='expired'
-                WHERE status='active' AND expires_at > 0 AND expires_at <= ?
+                WHERE status='active' AND expires_at > 0 AND expires_at <= ?{lifecycle_clause}
                 """,
                 (stamp,),
             )
-            return int(cursor.rowcount or 0)
+            facts = conn.execute("UPDATE memory_facts SET status='expired' WHERE status='active' AND expires_at>0 AND expires_at<=?", (stamp,))
+            return int(cursor.rowcount or 0) + int(facts.rowcount or 0)
 
-    def forget(self, *, query: str, scope: str, purge: bool = False, now: int | None = None) -> tuple[int, int]:
+    def forget(self, *, query: str, scope: str, purge: bool = False, now: int | None = None, record_id: str = "") -> tuple[int, int]:
         terms = self._terms(query)
-        if not terms:
+        exact_kind, exact_bare = self.lifecycle._identity(record_id) if record_id else ("", "")
+        if not terms and not record_id:
             return 0, 0
         stamp = int(now or time.time())
         forgotten = 0
         purged = 0
         with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                "SELECT event_id, text, layer FROM memory_events WHERE scope = ? AND status = 'active'",
+                "SELECT event_id,text,layer,metadata_json,source_id FROM memory_events WHERE scope=? AND status IN ('active','expired')",
                 (str(scope),),
             ).fetchall()
             fact_rows = conn.execute(
-                "SELECT fact_id, text FROM memory_facts WHERE scope = ? AND status = 'active'",
+                "SELECT fact_id,text,source_id FROM memory_facts WHERE scope=? AND status IN ('active','expired')",
                 (str(scope),),
             ).fetchall()
-            event_ids = [str(row["event_id"]) for row in rows if all(term in str(row["text"]).lower() for term in terms)]
-            fact_ids = [str(row["fact_id"]) for row in fact_rows if all(term in str(row["text"]).lower() for term in terms)]
+            # A summary/retired event may no longer contain the forgotten
+            # term. Its separately retained scoped source turn proves linkage.
+            turn_matches = []
+            if terms and not record_id:
+                turn_matches = [row for row in conn.execute("SELECT source_id,content FROM memory_turns WHERE scope=?", (str(scope),))
+                                if all(term in str(row["content"]).lower() for term in terms)]
+                for turn in turn_matches:
+                    self.lifecycle.revoke(conn, scope=str(scope), source_id=turn["source_id"], text=turn["content"], now=stamp)
+            source_ids = {str(row["source_id"]) for row in turn_matches}
+            event_ids = [str(row["event_id"]) for row in rows if
+                         exact_kind == "event" and row["event_id"] == exact_bare] if record_id else [
+                         str(row["event_id"]) for row in rows if all(term in str(row["text"]).lower() for term in terms) or row["source_id"] in source_ids]
+            fact_ids = [str(row["fact_id"]) for row in fact_rows if exact_kind == "fact" and row["fact_id"] == exact_bare] if record_id else [
+                        str(row["fact_id"]) for row in fact_rows if all(term in str(row["text"]).lower() for term in terms) or row["source_id"] in source_ids]
+            matched_event_ids = set(event_ids)
+            matched_task_ids = {
+                str(metadata.get("task_id") or "")
+                for row in rows
+                if str(row["event_id"]) in matched_event_ids
+                for metadata in (self._loads(row["metadata_json"]),)
+                if metadata.get("record_type") in {"agent_task_summary", "agent_task_detail"}
+                and str(metadata.get("task_id") or "").strip()
+            }
+            if matched_task_ids:
+                linked_ids = {
+                    str(row["event_id"])
+                    for row in rows
+                    for metadata in (self._loads(row["metadata_json"]),)
+                    if metadata.get("record_type") in {"agent_task_summary", "agent_task_detail"}
+                    and str(metadata.get("task_id") or "") in matched_task_ids
+                }
+                event_ids = list(dict.fromkeys((*event_ids, *linked_ids)))
+            # Source-linked summaries may omit the original query. Remove
+            # those derivatives by provenance, not by similarity or scope mixing.
+            while True:
+                known = set(event_ids)
+                known_records = {f"event:{item}" for item in event_ids} | {f"fact:{item}" for item in fact_ids}
+                linked = [str(row["event_id"]) for row in rows
+                          for metadata in (self._loads(row["metadata_json"]),)
+                          for parents in (metadata.get("source_record_ids", []),)
+                          if (isinstance(parents, list) and known_records.intersection(str(item) for item in parents))
+                          or (known_records and metadata.get("source") == "local_daily_rollup" and not parents)]
+                event_ids = list(dict.fromkeys((*event_ids, *linked)))
+                if set(event_ids) == known:
+                    break
+            for record_type, selected_ids, selected_rows, pk in (("event", event_ids, rows, "event_id"), ("fact", fact_ids, fact_rows, "fact_id")):
+                for row in selected_rows:
+                    rid = str(row[pk])
+                    if rid not in selected_ids:
+                        continue
+                    state = conn.execute("SELECT summary_source_hash FROM memory_lifecycle WHERE record_type=? AND record_id=?", (record_type, rid)).fetchone()
+                    self.lifecycle.revoke(conn, scope=str(scope), source_id=row["source_id"], text=row["text"], now=stamp, original_hash=state["summary_source_hash"] if state else "")
+                    conn.execute("DELETE FROM memory_lifecycle WHERE record_type=? AND record_id=?", (record_type, rid))
+                    conn.execute("DELETE FROM memory_lifecycle_evidence WHERE record_type=? AND record_id=?", (record_type, rid))
+                    conn.execute("DELETE FROM memory_embeddings WHERE record_type=? AND record_id=?", (record_type, rid))
+                    if record_type == "event":
+                        self._l1_semantic_cache = {key: value for key, value in self._l1_semantic_cache.items() if key[1] != rid}
             if purge:
                 conn.executemany("DELETE FROM memory_events WHERE event_id = ?", [(item,) for item in event_ids])
                 conn.executemany("DELETE FROM memory_facts WHERE fact_id = ?", [(item,) for item in fact_ids])
@@ -1264,14 +1660,16 @@ class MemoryStore:
             conn.executemany(
                 "INSERT INTO memory_forget_log (forget_id, scope, query, record_id, layer, created_at, action) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (uuid.uuid4().hex, str(scope), str(query), item, "event", stamp, "purge" if purge else "forget")
+                    (uuid.uuid4().hex, str(scope), "sha256:" + hashlib.sha256(str(query).encode("utf-8")).hexdigest(), item, "event", stamp, "purge" if purge else "forget")
                     for item in event_ids
                 ]
                 + [
-                    (uuid.uuid4().hex, str(scope), str(query), item, "fact", stamp, "purge" if purge else "forget")
+                    (uuid.uuid4().hex, str(scope), "sha256:" + hashlib.sha256(str(query).encode("utf-8")).hexdigest(), item, "fact", stamp, "purge" if purge else "forget")
                     for item in fact_ids
                 ],
             )
+        with self._lock:
+            self._clear_derived_caches(scope=str(scope), record_ids={*(f"event:{item}" for item in event_ids), *(f"fact:{item}" for item in fact_ids)})
         return forgotten, purged
 
     def reset_all(self) -> dict[str, int]:
@@ -1290,12 +1688,23 @@ class MemoryStore:
             "memory_routing_audit",
         )
         with self._lock, self._connect() as conn:
+            self._l1_semantic_cache.clear()
             counts = {
                 table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 for table in tables
             }
+            stamp = int(time.time())
+            for table in ("memory_events", "memory_facts"):
+                for row in conn.execute(f"SELECT scope,source_id,text FROM {table}").fetchall():
+                    self.lifecycle.revoke(conn, scope=row["scope"], source_id=row["source_id"], text=row["text"], now=stamp)
+            # Compact revocations intentionally survive a reset, so importing
+            # an old backup cannot undo the user's explicit forgetting.
+            for table in ("memory_lifecycle", "memory_lifecycle_evidence", "memory_lifecycle_audit", "memory_lifecycle_activity", "memory_lifecycle_scopes"):
+                conn.execute(f"DELETE FROM {table}")
             for table in tables:
                 conn.execute(f"DELETE FROM {table}")
+        with self._lock:
+            self._clear_derived_caches(scope="", record_ids=set())
         return counts
 
     def stats(self) -> dict[str, int]:

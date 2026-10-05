@@ -1,0 +1,11 @@
+{
+  "version": "memory-stage-b-expansion-v1",
+  "source_kind": "fictional_only",
+  "question_date": "2026-10-01T21:00:00+08:00",
+  "cases": [
+    {"id":"dev-b-diet","split":"dev","category":"同义饮食条件","question":"你记得最近吃饭有什么限制吗？请保留临时条件，别改成永久偏好。","history":[{"id":"diet","text":"这周胃不舒服，先别推荐辣的；平时我其实挺喜欢川菜。","at":"2026-09-29T10:00:00+08:00"}],"required_sources":["diet"],"answer_rule":{"all":["这周|暂时|临时","辣","川菜"]},"rubric":"本周临时避辣，不改成永久不吃辣；平时喜欢川菜。"},
+    {"id":"hold-b-diet","split":"holdout","category":"同义饮食条件","question":"你记得我说过的饮食忌口是什么吗？不要把建议当作我的决定。","history":[{"id":"diet","text":"我这阵子胃不舒服，先少吃辛辣；平时还是爱吃川菜。","at":"2026-09-29T11:00:00+08:00"},{"id":"suggestion","role":"assistant","text":"如果不舒服，可以考虑以后都吃清淡的。这个只是我的建议，你没有答应。","at":"2026-09-29T11:01:00+08:00"}],"required_sources":["diet"],"answer_rule":{"all":["这阵子|暂时|临时|最近","辣","川菜"]},"rubric":"临时少吃辛辣，不把助手永久清淡建议当作用户同意。"},
+    {"id":"dev-b-noise","split":"dev","category":"同义环境约束","question":"你记得我对环境噪声有什么要求吗？","history":[{"id":"noise-pref","text":"我工作时要安静，不想听背景音乐；休息时听歌没问题。","at":"2026-09-29T10:00:00+08:00"}],"required_sources":["noise-pref"],"answer_rule":{"all":["工作","安静","音乐","休息"]},"rubric":"工作时安静且无背景音乐，休息听歌无妨，不能永久禁音乐。"},
+    {"id":"hold-b-noise","split":"holdout","category":"同义环境约束","question":"你记得我读书时对周围声音的偏好吗？","history":[{"id":"noise-pref","text":"我读书需要安静，不喜欢嘈杂的地方；聚会倒是热闹一点没关系。","at":"2026-09-29T11:00:00+08:00"}],"required_sources":["noise-pref"],"answer_rule":{"all":["读书","安静","聚会|热闹"]},"rubric":"读书时安静与聚会时热闹条件并存，不升成永远讨厌热闹。"}
+  ]
+}

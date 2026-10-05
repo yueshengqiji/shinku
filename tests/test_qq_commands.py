@@ -24,6 +24,7 @@ def _message(
     *,
     conversation_type: str = "group",
     at_bot: bool = False,
+    group_id: str = "g-1",
 ) -> IncomingMessage:
     segments = []
     raw_event = {}
@@ -34,7 +35,7 @@ def _message(
     return IncomingMessage(
         message_id="m-1",
         sender_id="u-1",
-        conversation_id="g-1" if conversation_type == "group" else "u-1",
+        conversation_id=group_id if conversation_type == "group" else "u-1",
         conversation_type=conversation_type,
         segments=tuple(segments),
         raw_event=raw_event,
@@ -91,9 +92,62 @@ class CommandStateTests(unittest.TestCase):
             self.assertTrue(state.is_stream_enabled())
             self.assertEqual(interpreter.execute("/at reply on").status, "attention_reply_on")
             self.assertTrue(state.is_autonomous_reply_enabled())
+            self.assertTrue(state.set_autonomous_reply_enabled(False, "g-1"))
             restored = QQCommandState(state_path=path)
             self.assertTrue(restored.is_stream_enabled())
             self.assertTrue(restored.is_autonomous_reply_enabled())
+            self.assertFalse(restored.is_autonomous_reply_enabled("g-1"))
+            self.assertIsNone(restored.autonomous_reply_override("g-2"))
+
+    def test_at_reply_in_group_scopes_to_current_group_and_can_inherit_global(self) -> None:
+        state = QQCommandState(autonomous_reply_enabled=True)
+        interpreter = QQCommandInterpreter(state)
+
+        changed = interpreter.execute(
+            "/at reply off",
+            conversation_id="g-1",
+            conversation_type="group",
+        )
+
+        self.assertEqual(changed.status, "attention_reply_off")
+        self.assertFalse(state.is_autonomous_reply_enabled("g-1"))
+        self.assertTrue(state.is_autonomous_reply_enabled("g-2"))
+        self.assertTrue(state.is_autonomous_reply_enabled())
+        self.assertIn("这个群", changed.reply)
+
+        inherited = interpreter.execute(
+            "/at reply default",
+            conversation_id="g-1",
+            conversation_type="group",
+        )
+        self.assertEqual(inherited.status, "attention_reply_default")
+        self.assertTrue(state.is_autonomous_reply_enabled("g-1"))
+        self.assertIsNone(state.autonomous_reply_override("g-1"))
+
+    def test_at_reply_can_target_group_from_private_and_keeps_global_default_separate(self) -> None:
+        state = QQCommandState(autonomous_reply_enabled=True)
+        interpreter = QQCommandInterpreter(state)
+
+        result = interpreter.execute(
+            "/at reply off 348600105",
+            conversation_id="master",
+            conversation_type="private",
+        )
+
+        self.assertEqual(result.status, "attention_reply_off")
+        self.assertFalse(state.is_autonomous_reply_enabled("348600105"))
+        self.assertTrue(state.is_autonomous_reply_enabled("348600106"))
+        self.assertTrue(state.is_autonomous_reply_enabled())
+
+        global_result = interpreter.execute(
+            "/at reply off",
+            conversation_id="master",
+            conversation_type="private",
+        )
+        self.assertEqual(global_result.status, "attention_reply_off")
+        self.assertFalse(state.is_autonomous_reply_enabled())
+        self.assertFalse(state.is_autonomous_reply_enabled("348600105"))
+        self.assertFalse(state.is_autonomous_reply_enabled("348600106"))
 
     def test_onlooker_is_scoped_to_one_group(self) -> None:
         state = QQCommandState()
@@ -150,6 +204,26 @@ class CommandRouteTests(unittest.TestCase):
         self.assertFalse(adapter.ingest_message(_message("普通群聊"), at=1.0).scheduled)
         state.set_autonomous_reply_enabled(True)
         self.assertTrue(adapter.ingest_message(_message("普通群聊"), at=2.0).scheduled)
+
+    def test_group_override_is_live_and_isolated_to_its_group(self) -> None:
+        state = QQCommandState(autonomous_reply_enabled=True)
+        adapter = QQIngressAdapter(
+            route_policy=ReplyRoutePolicy(bot_ids=frozenset({"bot-1"})),
+            attention_policy=AttentionPolicy(autonomous_probability=1.0, random_source=lambda: 0.0),
+            batcher=AttentionBatcher(window_seconds=1.0),
+        )
+        adapter.set_command_state(state)
+        state.set_autonomous_reply_enabled(False, "g-1")
+
+        blocked = adapter.ingest_message(_message("闲聊一", group_id="g-1"), at=1.0)
+        allowed = adapter.ingest_message(_message("闲聊二", group_id="g-2"), at=2.0)
+        addressed = adapter.ingest_message(_message("真红？", at_bot=True, group_id="g-1"), at=3.0)
+
+        self.assertFalse(blocked.scheduled)
+        self.assertEqual(blocked.attention.reason, "autonomous_reply_disabled")
+        self.assertTrue(allowed.scheduled)
+        self.assertTrue(addressed.scheduled)
+        self.assertEqual(addressed.route.reason, "mentioned_bot")
 
 
 class BridgeCommandTests(unittest.TestCase):

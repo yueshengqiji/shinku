@@ -54,6 +54,8 @@ class QQAgentAssemblyTests(unittest.TestCase):
         config = load_qq_agent_config({})
         self.assertFalse(config.enabled)
         self.assertFalse(config.send_enabled)
+        self.assertNotIn("reply_short_max_segments", config.diagnostics())
+        self.assertNotIn("reply_long_max_segments", config.diagnostics())
         self.assertEqual(config.validation_errors(), ())
 
     def test_enabled_config_requires_persona_and_model_boundary(self) -> None:
@@ -154,9 +156,13 @@ class QQAgentAssemblyTests(unittest.TestCase):
         self.assertEqual((receipt.dispatched, len(replies)), (1, 1))
         self.assertEqual((replies[0].delivery_status, replies[0].sent), ("dry_run", False))
         self.assertIn("两句", replies[0].final_text)
-        self.assertEqual(runtime.calls[0]["user_images"], [{"data_url": "data:image/png;base64,aGVsbG8="}])
+        self.assertEqual(runtime.calls[0]["user_images"], [{
+            "data_url": "data:image/png;base64,aGVsbG8=", "source_message_id": "m-1",
+            "source_sender_id": "u-20", "source_sender_label": "", "reference_kind": "direct",
+        }])
+        self.assertEqual(len(runtime.calls[0]["history_turns"]), 1)
         self.assertIn("先看这张", runtime.calls[0]["history_turns"][0]["content"])
-        self.assertIn("再补一句", runtime.calls[0]["history_turns"][1]["content"])
+        self.assertIn("再补一句", runtime.calls[0]["user_prompt"])
 
 
 if __name__ == "__main__":

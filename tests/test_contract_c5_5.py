@@ -96,15 +96,17 @@ class IndependentGrayJointTests(unittest.TestCase):
         self.assertEqual({record.text for record in records}, {"请确认联合回归", "联合回归已收到。"})
         self.assertEqual({record.metadata.get("role") for record in records}, {"user", "assistant"})
 
-    def test_sender_disabled_keeps_memory_and_never_delivers(self) -> None:
+    def test_sender_disabled_keeps_user_memory_but_not_unsent_assistant(self) -> None:
         receipt, replies, _runtime = self._run_event(sender=None)
 
         self.assertEqual(receipt.dispatched, 1)
         self.assertEqual((replies[0].delivery_status, replies[0].sent), ("dry_run", False))
         records = self.memory.store.search(query="请确认联合回归", scope="group:g-joint")
-        self.assertEqual(len(records), 2)
-        self.assertEqual({record.text for record in records}, {"请确认联合回归", "联合回归已收到。"})
-        self.assertEqual({record.metadata.get("role") for record in records}, {"user", "assistant"})
+        self.assertEqual(len(records), 1)
+        self.assertEqual({record.text for record in records}, {"请确认联合回归"})
+        self.assertEqual({record.metadata.get("role") for record in records}, {"user"})
+        # The simulated result remains inspectable, not historical QQ speech.
+        self.assertEqual(replies[0].final_text, "联合回归已收到。")
 
 
 if __name__ == "__main__":

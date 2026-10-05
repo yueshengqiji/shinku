@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,11 +36,98 @@ def _flag(value: Any, default: bool = False) -> bool:
 class RuntimeAuditMixin:
     """prompt 审计与 token / 缓存用量度量。"""
 
+    def _record_context_budget(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Log request sizes without text, URLs, tool arguments or image bytes."""
+        try:
+            status = str(record.get("status") or "unknown")
+            self._add_metric("context_budget_requests")
+            self._add_metric(f"context_budget_{status}")
+            root = Path(str(self._env("LOG_DIR", "") or self._env("LOG_ROOT", "logs") or "logs"))
+            now = datetime.now(timezone.utc)
+            path = root / "llm_context_budget" / f"{now:%Y-%m-%d}.jsonl"
+            request_id = f"{time.time_ns():x}"
+            safe_record = {
+                "kind": "estimate",
+                "ts": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "request_id": request_id,
+                "model": record.get("model", ""),
+                "channel": record.get("channel", "aux"),
+                "mode": record.get("mode", "observe"),
+                "status": status,
+                "context_window_tokens": record.get("context_window_tokens", 0),
+                "input_limit_estimate": record.get("input_limit_estimate", 0),
+                "before": record.get("before", {}),
+                "after": record.get("after", {}),
+                "history_turns_removed": record.get("history_turns_removed", 0),
+                "history_messages_removed": record.get("history_messages_removed", 0),
+            }
+            if "projected_after" in record:
+                safe_record["projected_after"] = record["projected_after"]
+            with _AUDIT_LOCK:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(safe_record, ensure_ascii=False, sort_keys=True) + "\n")
+            return {
+                "request_id": request_id,
+                "path": path,
+                "channel": record.get("channel", "aux"),
+                "estimated_input": (
+                    record.get("after", {}).get("total", 0)
+                    if record.get("mode") == "enforce" and status == "trimmed_history"
+                    else record.get("before", {}).get("total", 0)
+                ),
+            }
+        except Exception:
+            self._add_metric("context_budget_audit_failures")
+            return {}
+
+    def _record_context_budget_usage(self, context: dict[str, Any], response: Any) -> None:
+        """Append provider usage under the same request ID; never inspect response text."""
+        if not context.get("request_id") or not context.get("path"):
+            return
+        try:
+            usage = getattr(response, "usage", None)
+            if usage is None and isinstance(response, dict):
+                usage = response.get("usage")
+            values: dict[str, int] = {}
+            if usage is not None:
+                for label, aliases in {
+                    "actual_input_tokens": ("prompt_tokens", "input_tokens", "promptTokenCount"),
+                    "actual_output_tokens": ("completion_tokens", "output_tokens", "candidatesTokenCount"),
+                    "cache_read_tokens": ("cache_read_input_tokens", "prompt_cache_hit_tokens"),
+                }.items():
+                    for alias in aliases:
+                        present, value = self._read_usage_field(usage, alias)
+                        if present:
+                            values[label] = value
+                            break
+            available = "actual_input_tokens" in values
+            self._add_metric("context_budget_usage_available" if available else "context_budget_usage_unavailable")
+            event = {
+                "kind": "usage",
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "request_id": context["request_id"],
+                "channel": context.get("channel", "aux"),
+                "usage_available": available,
+                "estimated_input_tokens": context.get("estimated_input", 0),
+                **values,
+            }
+            if available and values["actual_input_tokens"] > 0:
+                event["estimate_to_actual_ratio"] = round(
+                    int(context.get("estimated_input") or 0) / values["actual_input_tokens"], 3
+                )
+            with _AUDIT_LOCK:
+                with Path(context["path"]).open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception:
+            self._add_metric("context_budget_audit_failures")
+
     def _record_cache(
         self,
         response: Any,
         *,
         prompt_cache_key: str = "",
+        metric_suffix: str | None = None,
         token_usage_seen: set[str] | None = None,
     ) -> bool:
         try:
@@ -49,7 +137,11 @@ class RuntimeAuditMixin:
             if usage is None:
                 return False
 
-            suffix = "chat" if str(prompt_cache_key or "").strip().startswith("chat:") else "aux"
+            suffix = (
+                metric_suffix
+                if metric_suffix in {"chat", "aux"}
+                else "chat" if str(prompt_cache_key or "").strip().startswith("chat:") else "aux"
+            )
             self._record_tokens(usage, metric_suffix=suffix, seen=token_usage_seen)
 
             read_present, read = self._read_usage_field(usage, "cache_read_input_tokens")
@@ -114,6 +206,25 @@ class RuntimeAuditMixin:
         for key, value in values.items():
             self._add_metric(key, value)
             self._add_metric(f"{key}_{metric_suffix}", value)
+        # When called from QQ, attach this provider-reported usage to the
+        # current turn trace. This is diagnostic-only and a no-op elsewhere.
+        try:
+            from .turn_usage import report_qq_turn_usage
+
+            trace_values = dict(values)
+            for target, aliases in {
+                "cache_read_tokens": ("cache_read_input_tokens", "prompt_cache_hit_tokens"),
+                "cache_creation_tokens": ("cache_creation_input_tokens", "prompt_cache_miss_tokens"),
+            }.items():
+                for alias in aliases:
+                    present_value, count = self._read_usage_field(usage, alias)
+                    if present_value:
+                        trace_values[target] = count
+                        break
+            report_qq_turn_usage(channel=metric_suffix, calls=1, **trace_values)
+        except Exception:
+            # Usage tracing must never affect model execution.
+            pass
         return True
 
     def _read_usage_field(self, usage: Any, key: str) -> tuple[bool, int]:

@@ -101,12 +101,20 @@ class MemoryLayerTests(unittest.TestCase):
                 "SHINKU_MEMORY_RETRIEVAL_LIMIT": "2",
                 "SHINKU_MEMORY_MAX_QUERY_TERMS": "4",
                 "SHINKU_MEMORY_DETERMINISTIC_GUARDS": "false",
+                "SHINKU_MEMORY_AGENT_TASK_DETAIL_ENABLED": "false",
+                "SHINKU_MEMORY_AGENT_TASK_DETAIL_TTL_SECONDS": "7200",
+                "SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_RECORDS": "25",
+                "SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_STEPS": "8",
             }
         )
         self.assertEqual(policy.event_ttl_seconds, 60)
         self.assertEqual(policy.retrieval_limit, 2)
         self.assertEqual(policy.max_query_terms, 4)
         self.assertFalse(policy.deterministic_guards)
+        self.assertFalse(policy.agent_task_detail_enabled)
+        self.assertEqual(policy.agent_task_detail_ttl_seconds, 7200)
+        self.assertEqual(policy.agent_task_detail_max_records, 25)
+        self.assertEqual(policy.agent_task_detail_max_steps, 8)
 
     def test_deterministic_memory_shortcuts_can_be_disabled(self) -> None:
         calls: list[dict[str, str]] = []

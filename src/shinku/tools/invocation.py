@@ -42,6 +42,7 @@ class ToolInvocation:
     arguments: dict[str, Any] = field(default_factory=dict)
     source: str = LEGACY_JSON
     id: str = ""
+    protocol_error: str = ""
 
     def __post_init__(self) -> None:
         # 调用方没给 ID 时补一个；给了就一律尊重原值。
@@ -101,6 +102,8 @@ def legacy_tool_call_to_invocation(
 
     if not isinstance(tool_call, dict):
         return None
+    if tool_call.get("_malformed") is True:
+        return None
 
     name = str(tool_call.get("type") or "").strip()
     if not name:
@@ -128,6 +131,8 @@ def invocation_to_legacy_tool_call(
     回写老式形态却带上 native 来源标记，等于把来源信息丢在了半路。
     """
 
+    if invocation.protocol_error:
+        return {"type": invocation.name, "_malformed": True}
     payload: dict[str, Any] = {"type": invocation.name, **dict(invocation.arguments or {})}
     if include_metadata and str(invocation.source or LEGACY_JSON) != LEGACY_JSON:
         payload[TOOL_SOURCE_FIELD] = str(invocation.source or "")

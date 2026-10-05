@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from shinku.agent.loop import AgentLoop, AgentRunResult, ApprovalGate
+from shinku.agent.loop import AgentDecision, AgentLoop, AgentRunResult, AgentState, ApprovalGate, CompletionGate
 from shinku.agent.planner import ChatRuntime, LLMPlanner, PromptBuilder, UserImagesBuilder
+from shinku.agent.verification import SmartCompletionVerifier
 from shinku.tools.execution import ExecutionPolicy, ToolHandler
 from shinku.tools.invocation import ToolInvocation
 from shinku.tools.registry import ToolRegistry
@@ -108,11 +109,15 @@ class ToolHost:
         build_user_images: UserImagesBuilder | None = None,
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
-        completion_gate: Callable[[Any, str], bool] | None = None,
+        completion_gate: CompletionGate | None = None,
         approval_gate: ApprovalGate | None = None,
         prompt_cache_key: str = "",
         temperature: float = 0.2,
         history_limit: int = 12,
+        tool_specs_transform: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
+        state_observer: Callable[[AgentState, str], None] | None = None,
+        interruption_check: Callable[[AgentState], str] | None = None,
+        sliced: bool = False,
     ) -> AgentLoop:
         native_supported = self._native_tools_supported(runtime)
         tools_enabled = native_supported is not False
@@ -121,6 +126,8 @@ class ToolHost:
             if tools_enabled
             else []
         )
+        if callable(tool_specs_transform):
+            specs = tool_specs_transform(specs)
         registered = self.registry.view() if tools_enabled else {}
         handlers: dict[str, ToolHandler] = {}
         allowed = {str(name or "").strip() for name in allowed_tool_names or set()}
@@ -139,13 +146,39 @@ class ToolHost:
             temperature=temperature,
             history_limit=history_limit,
         )
+        effective_gate = completion_gate
+        if effective_gate is None:
+            tool_capabilities: dict[str, dict[str, tuple[str, ...]]] = {}
+            for name, handler in handlers.items():
+                effects = getattr(handler, "agent_completion_effects", ())
+                target_arguments = getattr(handler, "agent_completion_target_arguments", ())
+                if isinstance(effects, str):
+                    effects = (effects,)
+                if isinstance(target_arguments, str):
+                    target_arguments = (target_arguments,)
+                if str(getattr(handler, "agent_permission_class", "")) == "read" or str(getattr(handler, "agent_progress_class", "")) == "observe":
+                    if not set(effects or ()) & {"write", "delete", "send", "process_stop"}:
+                        effects = (*effects, f"tool:{name}")
+                if effects:
+                    tool_capabilities[name] = {
+                        "effects": tuple(str(item) for item in effects),
+                        "target_arguments": tuple(str(item) for item in target_arguments),
+                    }
+            effective_gate = SmartCompletionVerifier(
+                allowed_tool_names=list(handlers.keys()),
+                tool_capabilities=tool_capabilities,
+                result_handlers=handlers,
+            )
         return AgentLoop(
             planner=planner,
             handlers=handlers,
             max_rounds=max_rounds,
             policy=policy,
-            completion_gate=completion_gate,
+            completion_gate=effective_gate,
             approval_gate=approval_gate,
+            state_observer=state_observer,
+            interruption_check=interruption_check,
+            sliced=sliced,
         )
 
     @staticmethod
@@ -166,18 +199,24 @@ class ToolHost:
         task_id: str = "",
         context: Any = None,
         initial_transcript: list[dict[str, Any]] | None = None,
+        first_decision: AgentDecision | Mapping[str, Any] | None = None,
         allowed_tool_names: set[str] | None = None,
         build_user_prompt: PromptBuilder | None = None,
         build_user_images: UserImagesBuilder | None = None,
         max_rounds: int = 6,
         policy: ExecutionPolicy | None = None,
-        completion_gate: Callable[[Any, str], bool] | None = None,
+        completion_gate: CompletionGate | None = None,
         approval_gate: ApprovalGate | None = None,
         approved_invocation: ToolInvocation | None = None,
         approved_invocations: Sequence[ToolInvocation] | None = None,
         prompt_cache_key: str = "",
         temperature: float = 0.2,
         history_limit: int = 12,
+        tool_specs_transform: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
+        state_observer: Callable[[AgentState, str], None] | None = None,
+        interruption_check: Callable[[AgentState], str] | None = None,
+        sliced: bool = False,
+        checkpoint: Any = None,
     ) -> AgentRunResult:
         loop = self.build_loop(
             runtime=runtime,
@@ -192,11 +231,17 @@ class ToolHost:
             prompt_cache_key=prompt_cache_key,
             temperature=temperature,
             history_limit=history_limit,
+            tool_specs_transform=tool_specs_transform,
+            state_observer=state_observer,
+            interruption_check=interruption_check,
+            sliced=sliced,
         )
         return loop.run(
             task_id=task_id,
             context=context,
             initial_transcript=initial_transcript,
+            first_decision=first_decision,
             approved_invocation=approved_invocation,
             approved_invocations=approved_invocations,
+            checkpoint=checkpoint,
         )

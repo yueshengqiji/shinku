@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,24 +49,28 @@ class InMemoryPendingApprovalStore:
     """默认的会话级 FIFO 存储；进程退出后不会恢复待授权动作。"""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._records: dict[str, list[PendingApprovalRecord]] = {}
 
     def get(self, conversation_id: str) -> PendingApprovalRecord | None:
-        records = self._records.get(str(conversation_id or "").strip(), [])
-        return records[0] if records else None
+        with self._lock:
+            records = self._records.get(str(conversation_id or "").strip(), [])
+            return records[0] if records else None
 
     def put(self, conversation_id: str, record: PendingApprovalRecord) -> None:
         key = str(conversation_id or "").strip()
         if key:
-            self._records.setdefault(key, []).append(record)
+            with self._lock:
+                self._records.setdefault(key, []).append(record)
 
     def delete(self, conversation_id: str) -> None:
         key = str(conversation_id or "").strip()
-        records = self._records.get(key, [])
-        if records:
-            records.pop(0)
-        if not records:
-            self._records.pop(key, None)
+        with self._lock:
+            records = self._records.get(key, [])
+            if records:
+                records.pop(0)
+            if not records:
+                self._records.pop(key, None)
 
 
 def _json_safe(value: Any) -> Any:
@@ -112,28 +117,32 @@ class JsonPendingApprovalStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
+        self._lock = threading.RLock()
         self._records: dict[str, list[PendingApprovalRecord]] = {}
         self._load()
 
     def get(self, conversation_id: str) -> PendingApprovalRecord | None:
-        records = self._records.get(str(conversation_id or "").strip(), [])
-        return records[0] if records else None
+        with self._lock:
+            records = self._records.get(str(conversation_id or "").strip(), [])
+            return records[0] if records else None
 
     def put(self, conversation_id: str, record: PendingApprovalRecord) -> None:
         key = str(conversation_id or "").strip()
         if not key:
             return
-        self._records.setdefault(key, []).append(record)
-        self._flush()
+        with self._lock:
+            self._records.setdefault(key, []).append(record)
+            self._flush()
 
     def delete(self, conversation_id: str) -> None:
         key = str(conversation_id or "").strip()
-        records = self._records.get(key, [])
-        if records:
-            records.pop(0)
-        if not records:
-            self._records.pop(key, None)
-        self._flush()
+        with self._lock:
+            records = self._records.get(key, [])
+            if records:
+                records.pop(0)
+            if not records:
+                self._records.pop(key, None)
+            self._flush()
 
     def _load(self) -> None:
         try:

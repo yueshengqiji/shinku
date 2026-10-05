@@ -29,6 +29,8 @@ class ExternalToolDescriptor:
     name: str
     description: str = ""
     input_schema: dict[str, Any] | None = None
+    progress_class: str = "observe"
+    permission_class: str = "change"
 
     def __post_init__(self) -> None:
         name = str(self.name or "").strip()
@@ -39,6 +41,10 @@ class ExternalToolDescriptor:
             raise TypeError("external tool input_schema must be a mapping")
         if isinstance(schema, Mapping) and str(schema.get("type") or "object") != "object":
             raise ValueError("external tool input_schema must describe an object")
+        if str(self.progress_class or "").strip().lower() not in {"observe", "change"}:
+            raise ValueError("external tool progress_class must be observe or change")
+        if str(self.permission_class or "").strip().lower() not in {"read", "change", "sensitive"}:
+            raise ValueError("external tool permission_class must be read, change, or sensitive")
 
     def schema(self) -> dict[str, Any]:
         raw = dict(self.input_schema or {})
@@ -51,6 +57,8 @@ class _ExternalToolHandler:
         self.descriptor = descriptor
         self.transport = transport
         self.tool_type = descriptor.name
+        self.agent_progress_class = str(descriptor.progress_class or "observe").strip().lower()
+        self.agent_permission_class = str(descriptor.permission_class or "change").strip().lower()
 
     def tool_metadata(self) -> SimpleNamespace:
         return SimpleNamespace(

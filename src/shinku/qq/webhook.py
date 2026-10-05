@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -37,7 +38,8 @@ def create_napcat_webhook_router(
             if authorization != f"Bearer {expected_token}":
                 return JSONResponse({"ok": False, "error": "event_unauthorized"}, status_code=401)
         try:
-            result = host.handle_event(await request.body())
+            body = await request.body()
+            result = await asyncio.to_thread(host.handle_event, body)
         except (TypeError, ValueError):
             return JSONResponse({"ok": False, "error": "invalid_napcat_event"}, status_code=400)
         payload = {

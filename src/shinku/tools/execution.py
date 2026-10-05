@@ -129,17 +129,46 @@ def _handler_name(handler: Any, fallback: Any = "") -> str:
     return str(getattr(handler, "tool_type", "") or fallback or "").strip()
 
 
+def _call_for_permission_mode(
+    *,
+    handler: Any,
+    invocation: ToolInvocation,
+    raw_call: dict[str, Any] | None,
+    context: Any,
+) -> dict[str, Any]:
+    candidate = dict(raw_call) if isinstance(raw_call, dict) else invocation_to_legacy_tool_call(invocation)
+    mode = str(context.get("agent_permission_mode") or "") if isinstance(context, Mapping) else ""
+    if mode not in {"full", "ultra"} or not bool(getattr(handler, "agent_auto_confirm_in_full_access", False)):
+        return candidate
+    metadata_getter = getattr(handler, "tool_metadata", None)
+    try:
+        metadata = metadata_getter() if callable(metadata_getter) else None
+    except Exception:
+        metadata = None
+    schema = getattr(metadata, "input_schema", None)
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    if isinstance(properties, Mapping) and "confirm" in properties:
+        # In full/ultra modes the explicit permission profile is the consent.
+        # Keep this opt-in to private handlers that mark the field as an
+        # authorization gate; unrelated tools may use a business `confirm` arg.
+        candidate["confirm"] = True
+    return candidate
+
+
 def validate_invocation(
     invocation: ToolInvocation | None,
     handlers: Mapping[str, ToolHandler] | None,
     *,
     raw_call: dict[str, Any] | None = None,
     policy: ExecutionPolicy | None = None,
+    context: Any = None,
 ) -> ValidationResult:
     """校验工具名称、调用策略和 handler 参数，不执行任何副作用。"""
 
     if invocation is None:
         return ValidationResult.success()
+    if invocation.protocol_error or not isinstance(invocation.arguments, Mapping):
+        return ValidationResult.fail("tool_arguments_malformed", "工具调用协议参数无法解析，没有执行补造的空参数调用。")
     tool_name = str(invocation.name or "").strip()
     if not tool_name:
         return ValidationResult.fail("missing_tool", "工具调用缺少名称。")
@@ -155,7 +184,12 @@ def validate_invocation(
     normalizer = getattr(handler, "normalize_call", None)
     if not callable(normalizer):
         return ValidationResult.fail("invalid_handler", f"工具「{tool_name}」没有参数校验器。")
-    candidate = raw_call if isinstance(raw_call, dict) else invocation_to_legacy_tool_call(invocation)
+    candidate = _call_for_permission_mode(
+        handler=handler,
+        invocation=invocation,
+        raw_call=raw_call,
+        context=context,
+    )
     try:
         normalized = normalizer(candidate)
     except Exception:
@@ -192,13 +226,52 @@ def result_to_envelope(*, invocation: ToolInvocation, result: Any) -> ToolResult
     feedback = str(_result_value(result, "followup_context", "") or "").strip()
     updates = _result_value(result, "state_updates", {})
     events = _result_value(result, "stream_events", [])
+    updates = dict(updates or {}) if isinstance(updates, Mapping) else {}
+    raw_status = str(_result_value(result, "status", "") or "").strip().lower()
+    explicit_ok = _result_value(result, "ok", None)
+    failed_statuses = {"error", "failed", "failure", "timeout", "rejected", "blocked", "cancelled"}
+    successful_statuses = {"", "ok", "success", "completed", "complete", "async"}
+    failed = (
+        raw_status in failed_statuses
+        or (raw_status not in successful_statuses and bool(raw_status))
+        or (explicit_ok is not None and not bool(explicit_ok))
+        or bool(updates.get("private_tool_error"))
+    )
+    if not feedback:
+        feedback = str(
+            _result_value(result, "message", "")
+            or _result_value(result, "detail", "")
+            or _result_value(result, "reason", "")
+            or _result_value(result, "error", "")
+            or ""
+        ).strip()
+    if failed and not feedback:
+        feedback = "工具返回了失败状态，但没有提供可读原因。"
+    if failed and "<tool_use_error>" not in feedback:
+        feedback = f"<tool_use_error>工具执行失败{f'（{raw_status}）' if raw_status else ''}：{feedback}</tool_use_error>"
+    failure_code = str(
+        _result_value(result, "code", "")
+        or _result_value(result, "error_code", "")
+        or ""
+    ).strip()
+    if failed and not failure_code:
+        candidate = str(_result_value(result, "error", "") or "").strip()
+        if candidate and len(candidate) <= 64 and candidate.replace("_", "").isalnum() and candidate.lower() == candidate:
+            failure_code = candidate
     return ToolResultEnvelope(
         invocation_id=invocation.id,
-        status="ok",
+        status="error" if failed else "ok",
         model_feedback=feedback,
         data={
             "tool_type": str(_result_value(result, "tool_type", "") or invocation.name),
-            "state_updates": dict(updates or {}) if isinstance(updates, Mapping) else {},
+            "state_updates": updates,
+            **(
+                {
+                    "code": failure_code or "tool_reported_error"
+                }
+                if failed
+                else {}
+            ),
         },
         events=[dict(item) for item in list(events or []) if isinstance(item, Mapping)],
     )
@@ -214,13 +287,18 @@ def execute_invocation(
 ) -> tuple[Any | None, ToolResultEnvelope]:
     """执行一次工具调用；验证失败和 handler 异常都转成 envelope。"""
 
-    validation = validate_invocation(invocation, handlers, raw_call=raw_call, policy=policy)
+    validation = validate_invocation(invocation, handlers, raw_call=raw_call, policy=policy, context=context)
     if not validation.ok:
         return None, validation_to_envelope(invocation=invocation, validation=validation)
     assert handlers is not None
     tool_name = str(invocation.name or "").strip()
     handler = handlers[tool_name]
-    call = raw_call if isinstance(raw_call, dict) else invocation_to_legacy_tool_call(invocation)
+    call = _call_for_permission_mode(
+        handler=handler,
+        invocation=invocation,
+        raw_call=raw_call,
+        context=context,
+    )
     try:
         result = handler.execute(call=call, context=context)
     except Exception as exc:

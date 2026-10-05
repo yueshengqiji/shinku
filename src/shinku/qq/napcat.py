@@ -71,6 +71,10 @@ class NapCatVisualInput:
     source_kind: str
     reference: str
     data_url: str = ""
+    source_message_id: str = ""
+    source_sender_id: str = ""
+    source_sender_label: str = ""
+    reference_kind: str = "direct"
 
     @property
     def ready(self) -> bool:
@@ -112,27 +116,46 @@ class NapCatVisualInputBridge:
 
     def build(self, message: IncomingMessage) -> NapCatVisualBatch:
         inputs: list[NapCatVisualInput] = []
-        attachments = tuple(message.attachments) + tuple(message.quoted_attachments)
-        for attachment in attachments:
-            if str(attachment.get("kind") or "").strip().lower() != "image":
-                continue
-            reference = next(
-                (
-                    str(attachment.get(key) or "").strip()
-                    for key in ("url", "local_path", "media_id")
-                    if str(attachment.get(key) or "").strip()
-                ),
-                "",
-            )
-            source_kind = next(
-                (key for key in ("url", "local_path", "media_id") if str(attachment.get(key) or "").strip()),
-                "unknown",
-            )
-            data_url = reference if reference.lower().startswith("data:image/") else ""
-            if not data_url and self.materialize is not None:
-                data_url = self._coerce_data_url(self.materialize(dict(attachment)), attachment)
-            inputs.append(NapCatVisualInput(source_kind, reference, data_url))
+        quoted = message.quoted_message if isinstance(message.quoted_message, Mapping) else {}
+        sources = (
+            (message.attachments, message.message_id, message.sender_id, message.sender_label, "direct"),
+            (message.quoted_attachments, str(quoted.get("message_id") or ""),
+             str(quoted.get("sender_id") or quoted.get("user_id") or ""),
+             str(quoted.get("sender_label") or ""), "quoted"),
+        )
+        for attachments, source_id, sender_id, sender_label, reference_kind in sources:
+            for attachment in attachments:
+                inputs.extend(self._build_attachment(
+                    attachment, source_id=source_id, sender_id=sender_id,
+                    sender_label=sender_label, reference_kind=reference_kind,
+                ))
         return NapCatVisualBatch(tuple(inputs))
+
+    def _build_attachment(
+        self, attachment: Mapping[str, Any], *, source_id: str, sender_id: str,
+        sender_label: str, reference_kind: str,
+    ) -> tuple[NapCatVisualInput, ...]:
+        if str(attachment.get("kind") or "").strip().lower() != "image":
+            return ()
+        reference = next(
+            (str(attachment.get(key) or "").strip()
+             for key in ("url", "local_path", "media_id") if str(attachment.get(key) or "").strip()),
+            "",
+        )
+        source_kind = next(
+            (key for key in ("url", "local_path", "media_id") if str(attachment.get(key) or "").strip()),
+            "unknown",
+        )
+        data_url = reference if reference.lower().startswith("data:image/") else ""
+        if not data_url and self.materialize is not None:
+            data_url = self._coerce_data_url(self.materialize(dict(attachment)), attachment)
+        return (NapCatVisualInput(
+            source_kind, reference, data_url,
+            source_message_id=str(source_id or "").strip(),
+            source_sender_id=str(sender_id or "").strip(),
+            source_sender_label=str(sender_label or "").strip(),
+            reference_kind=reference_kind,
+        ),)
 
     @staticmethod
     def _coerce_data_url(value: Any, attachment: Mapping[str, Any]) -> str:
@@ -328,9 +351,12 @@ class NapCatActionTransport(DeliveryTransport):
         for segment in message.segments:
             if segment.kind == "text":
                 onebot_segments.append({"type": "text", "data": {"text": segment.text}})
+            elif segment.kind == "at":
+                onebot_segments.append({"type": "at", "data": {"qq": segment.target_id}})
             elif segment.kind in {"image", "file", "audio", "video"}:
                 file_ref = segment.url or segment.local_path or segment.media_id
-                onebot_segments.append({"type": segment.kind, "data": {"file": file_ref, **dict(segment.payload)}})
+                onebot_type = "record" if segment.kind == "audio" else segment.kind
+                onebot_segments.append({"type": onebot_type, "data": {"file": file_ref, **dict(segment.payload)}})
             elif segment.kind == "reply":
                 onebot_segments.append({"type": "reply", "data": dict(segment.payload)})
         return action, {target_key: message.conversation_id, "message": onebot_segments}
@@ -341,17 +367,22 @@ class NapCatActionTransport(DeliveryTransport):
             return {"ok": False, "error": "invalid_napcat_response"}
         status = str(raw.get("status") or "").strip().lower()
         retcode = raw.get("retcode", 0)
+        numeric_retcode = None
         try:
-            failed = int(retcode) != 0
+            numeric_retcode = int(retcode)
+            failed = numeric_retcode != 0
         except (TypeError, ValueError):
             failed = True
         if status and status not in {"ok", "async"}:
             failed = True
-        if failed:
-            return {"ok": False, "error": str(raw.get("message") or raw.get("wording") or "napcat_action_failed")}
         data = raw.get("data") if isinstance(raw.get("data"), Mapping) else {}
         message_id = data.get("message_id") or raw.get("message_id")
-        return {"ok": True, "message_ids": [str(message_id)] if message_id is not None else []}
+        known_ids = [str(message_id)] if isinstance(message_id, (str, int)) and not isinstance(message_id, bool) and str(message_id) else []
+        if failed:
+            return {"ok": False, "error": str(raw.get("message") or raw.get("wording") or "napcat_action_failed"),
+                    "message_ids": known_ids,
+                    "definitive_not_sent": not known_ids and numeric_retcode is not None and status in {"failed", "error"}}
+        return {"ok": True, "message_ids": known_ids}
 
 
 class NapCatHttpActionCaller:
@@ -367,7 +398,7 @@ class NapCatHttpActionCaller:
         base_url: str,
         *,
         access_token: str = "",
-        timeout: float = 10.0,
+        timeout: float = 30.0,
         opener: Callable[..., Any] | None = None,
     ) -> None:
         normalized = str(base_url or "").strip()

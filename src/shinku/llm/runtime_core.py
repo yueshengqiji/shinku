@@ -33,10 +33,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Generator
+from typing import Any, Callable, Generator, Mapping
 
 from shinku.llm.client import build_llm_client
+from shinku.llm.context_budget import ContextBudgetPolicy, assess_and_trim_payload
 from shinku.llm.policy import RuntimePolicy
+from shinku.agent.budget import TaskBudgetExceeded
 from shinku.tools.invocation import (
     NATIVE_OPENAI,
     NATIVE_TOOL_CALL_FIELD,
@@ -767,32 +769,53 @@ class RuntimeCore:
         system_extra_blocks: list[str] | None = None,
         history_turns: list[dict[str, str]] | None = None,
         prompt_audit_sections: list[dict[str, Any]] | None = None,
+        attempt_budget: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         native_requested = bool(self._coerce_tools(native_tools))
+        budget_context: dict[str, Any] = {}
+        response: Any = None
         try:
+            payload = self._build_payload(
+                bundle=bundle,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                json_mode=True,
+                prompt_cache_key=prompt_cache_key,
+                user_images=user_images,
+                native_tools=native_tools,
+                native_tool_choice=native_tool_choice,
+                system_extra_blocks=system_extra_blocks,
+                history_turns=history_turns,
+                prompt_audit_sections=prompt_audit_sections,
+                budget_context=budget_context,
+            )
             response = self._dispatch_completion(
                 bundle=bundle,
-                payload=self._build_payload(
-                    bundle=bundle,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    temperature=temperature,
-                    json_mode=True,
-                    prompt_cache_key=prompt_cache_key,
-                    user_images=user_images,
-                    native_tools=native_tools,
-                    native_tool_choice=native_tool_choice,
-                    system_extra_blocks=system_extra_blocks,
-                    history_turns=history_turns,
-                    prompt_audit_sections=prompt_audit_sections,
-                ),
+                payload=payload,
+                attempt_budget=attempt_budget,
             )
-            if not self._record_cache(response, prompt_cache_key=prompt_cache_key):
+            if not self._record_cache(
+                response,
+                prompt_cache_key=prompt_cache_key,
+                metric_suffix="chat" if bundle is self.chat else "aux",
+            ):
                 self._add_metric("cache_usage_unavailable_calls")
             native_tool_call = self._read_native_tool_call(response)
             if native_tool_call is not None:
-                self._add_metric("native_tool_call_extracted")
+                self._add_metric("native_tool_malformed_call" if native_tool_call.get("_malformed") is True else "native_tool_call_extracted")
                 return {NATIVE_TOOL_CALL_FIELD: native_tool_call, "tool_call": None}
+            if getattr(self, "_is_malformed_native_tool_call", lambda r: False)(response):
+                self._add_metric("native_tool_malformed_call")
+                return {
+                    NATIVE_TOOL_CALL_FIELD: {
+                        TOOL_SOURCE_FIELD: NATIVE_OPENAI,
+                        "tool_calls": [],
+                        "_malformed": True,
+                        "protocol_error": "native_tool_arguments_malformed",
+                    },
+                    "tool_call": None,
+                }
             if native_requested:
                 self._add_metric("native_tool_no_call")
             self._note_truncated(response, phase="call_json")
@@ -808,9 +831,13 @@ class RuntimeCore:
                 self._add_metric("chat_json_plain_text_recoveries")
                 return plain_text
             self._note_parse_failure(content, phase="call_json")
+        except TaskBudgetExceeded:
+            raise
         except Exception as exc:
             self._add_metric("errors")
             self._note_error(exc, phase="call_json")
+        finally:
+            self._record_context_budget_usage(budget_context, response)
         self._add_metric("chat_json_fallbacks")
         return dict(fallback)
 
@@ -838,6 +865,13 @@ class RuntimeCore:
             return None
         recovered = dict(fallback)
         recovered["text"] = text[:4000]
+        recovered.pop("_agent_transport_fallback", None)
+        verify_plain_text = recovered.pop("_agent_plain_text_verify", False)
+        if verify_plain_text is True and recovered.get("task_outcome") == "failed":
+            # This failed value came from the transport-error default, not an
+            # explicit model decision. Hosts opt in only when the recovered
+            # answer still passes a source/coverage or action receipt gate.
+            recovered.pop("task_outcome", None)
         return recovered
 
     # ------------------------------------------------------------------ #
@@ -864,6 +898,8 @@ class RuntimeCore:
         token_usage_seen: set[str] = set()
         stop_event_type = ""
         error = ""
+        budget_context: dict[str, Any] = {}
+        latest_usage_response: Any = None
         try:
             response = self._dispatch_completion(
                 bundle=bundle,
@@ -874,12 +910,16 @@ class RuntimeCore:
                     temperature=temperature,
                     stream=True,
                     prompt_cache_key=prompt_cache_key,
+                    budget_context=budget_context,
                 ),
             )
             for chunk in response:
+                if getattr(chunk, "usage", None) is not None or (isinstance(chunk, dict) and chunk.get("usage") is not None):
+                    latest_usage_response = chunk
                 cache_usage_reported = self._record_cache(
                     chunk,
                     prompt_cache_key=prompt_cache_key,
+                    metric_suffix="aux",
                     token_usage_seen=token_usage_seen,
                 ) or cache_usage_reported
                 text = self._read_stream_text(chunk)
@@ -923,6 +963,7 @@ class RuntimeCore:
             error = str(exc or "").strip()
             self._add_metric("errors")
         finally:
+            self._record_context_budget_usage(budget_context, latest_usage_response or response)
             self._close_response(response)
         if not cache_usage_reported:
             self._add_metric(
@@ -961,6 +1002,9 @@ class RuntimeCore:
         prompt_audit_sections: list[dict[str, Any]] | None = None,
     ) -> Generator[dict[str, Any], None, ChatJSONStreamResult]:
         native_requested = bool(self._coerce_tools(native_tools))
+        # HTTP retries, stream reconnects, cache stripping and JSON rescue all
+        # share this flat ceiling. They cannot multiply each other's limits.
+        attempt_budget = {"remaining": max(self.runtime_policy.http_attempts, self.runtime_policy.stream_attempts) + 1}
         # 强制工具调用时先发一次非流式请求再进流式：部分供应商（GLM 实测）
         # 在流式通道上会丢掉 required 约束改回纯文本，非流式没有这个问题。
         normalized_tool_choice = self._coerce_tool_choice(native_tool_choice)
@@ -979,6 +1023,7 @@ class RuntimeCore:
                     system_extra_blocks=system_extra_blocks,
                     history_turns=history_turns,
                     prompt_audit_sections=prompt_audit_sections,
+                    attempt_budget=attempt_budget,
                 )
                 native_call = non_stream.get(NATIVE_TOOL_CALL_FIELD)
                 if native_call is not None:
@@ -1026,9 +1071,12 @@ class RuntimeCore:
             early_tool_call = None
             tool_probe_disabled = False
             token_usage_seen: set[str] = set()
+            budget_context: dict[str, Any] = {}
+            latest_usage_response: Any = None
             try:
                 response = self._dispatch_completion(
                     bundle=bundle,
+                    attempt_budget=attempt_budget,
                     payload=self._build_payload(
                         bundle=bundle,
                         system_prompt=system_prompt,
@@ -1043,12 +1091,16 @@ class RuntimeCore:
                         system_extra_blocks=system_extra_blocks,
                         history_turns=history_turns,
                         prompt_audit_sections=prompt_audit_sections,
+                        budget_context=budget_context,
                     ),
                 )
                 for chunk in response:
+                    if getattr(chunk, "usage", None) is not None or (isinstance(chunk, dict) and chunk.get("usage") is not None):
+                        latest_usage_response = chunk
                     cache_usage_reported = self._record_cache(
                         chunk,
                         prompt_cache_key=prompt_cache_key,
+                        metric_suffix="chat",
                         token_usage_seen=token_usage_seen,
                     ) or cache_usage_reported
                     self._collect_stream_tool_parts(chunk, native_tool_parts)
@@ -1075,7 +1127,8 @@ class RuntimeCore:
                 error = str(exc or "").strip()
                 self._add_metric("errors")
                 # 只在还没产出任何内容（连接层失败）时重试一次
-                if stream_attempt < max_stream_attempts and not yielded_any and not raw_parts:
+                if (stream_attempt < max_stream_attempts and attempt_budget["remaining"] > 0
+                        and not yielded_any and not raw_parts and not native_tool_parts):
                     self._add_metric("chat_stream_retries")
                     if self.runtime_policy.stream_retry_delay_seconds:
                         time.sleep(self.runtime_policy.stream_retry_delay_seconds)
@@ -1084,8 +1137,10 @@ class RuntimeCore:
                 cache_usage_reported = self._record_cache(
                     response,
                     prompt_cache_key=prompt_cache_key,
+                    metric_suffix="chat",
                     token_usage_seen=token_usage_seen,
                 ) or cache_usage_reported
+                self._record_context_budget_usage(budget_context, latest_usage_response or response)
                 self._close_response(response)
             break
 
@@ -1097,7 +1152,7 @@ class RuntimeCore:
         raw_text = "".join(raw_parts)
         native_tool_call = self._assemble_stream_tool_call(native_tool_parts)
         if native_tool_call is not None:
-            self._add_metric("native_tool_call_extracted")
+            self._add_metric("native_tool_malformed_call" if native_tool_call.get("_malformed") is True else "native_tool_call_extracted")
             parsed = {NATIVE_TOOL_CALL_FIELD: native_tool_call, "tool_call": None}
         elif native_requested:
             self._add_metric("native_tool_no_call")
@@ -1109,7 +1164,7 @@ class RuntimeCore:
 
         rescue_attempted = False
         rescue_succeeded = False
-        if self._chat_reply_needs_rescue(parsed):
+        if self._chat_reply_needs_rescue(parsed) and attempt_budget["remaining"] > 0:
             rescue_attempted = True
             rescued, rescue_error = self._rescue_stream_via_json(
                 bundle=bundle,
@@ -1123,6 +1178,7 @@ class RuntimeCore:
                 system_extra_blocks=system_extra_blocks,
                 history_turns=history_turns,
                 prompt_audit_sections=prompt_audit_sections,
+                attempt_budget=attempt_budget,
             )
             if rescued is not None:
                 parsed = rescued
@@ -1181,6 +1237,8 @@ class RuntimeCore:
             return False
         if str(parsed.get("speech") or "").strip():
             return False
+        if str(parsed.get("text") or parsed.get("reply") or "").strip() and str(parsed.get("kind") or "") in {"final", "wait"}:
+            return False
         segments = parsed.get("speech_segments")
         return not isinstance(segments, list) or not any(str(item or "").strip() for item in segments)
 
@@ -1198,6 +1256,7 @@ class RuntimeCore:
         system_extra_blocks: list[str] | None,
         history_turns: list[dict[str, str]] | None,
         prompt_audit_sections: list[dict[str, Any]] | None,
+        attempt_budget: dict[str, int] | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
         """流式废了就用一次完整的非流式请求把它救回来。
 
@@ -1221,6 +1280,7 @@ class RuntimeCore:
                 system_extra_blocks=system_extra_blocks,
                 history_turns=history_turns,
                 prompt_audit_sections=prompt_audit_sections,
+                attempt_budget=attempt_budget,
             )
         except Exception as exc:  # pragma: no cover - 防御：_run_json_call 通常自己吞错
             self._add_metric("chat_stream_rescue_failures")
@@ -1404,6 +1464,7 @@ class RuntimeCore:
         system_extra_blocks: list[str] | None = None,
         history_turns: list[dict[str, str]] | None = None,
         prompt_audit_sections: list[dict[str, Any]] | None = None,
+        budget_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         user_content: str | list[dict[str, Any]]
         image_items = self._coerce_image_items(user_images)
@@ -1476,6 +1537,20 @@ class RuntimeCore:
         )
         if filtered_system_extra_blocks and self._is_anthropic(bundle):
             payload["system_extra_blocks"] = filtered_system_extra_blocks
+        budget_policy = ContextBudgetPolicy.from_environment()
+        if budget_policy.mode != "off":
+            payload, budget_record = assess_and_trim_payload(payload, budget_policy)
+            budget_record["channel"] = "chat" if bundle is self.chat else "aux"
+            recorded = self._record_context_budget(budget_record)
+            if budget_context is not None:
+                budget_context.update(recorded)
+            messages = payload["messages"]
+            if budget_record["status"] == "trimmed_history":
+                history_turns = [
+                    {"role": item["role"], "content": item["content"]}
+                    for item in messages[:-1]
+                    if item.get("role") in {"user", "assistant"}
+                ]
         self._maybe_record_audit(
             bundle=bundle,
             prompt_cache_key=prompt_cache_key,
@@ -1519,7 +1594,8 @@ class RuntimeCore:
     # 发送与重试
     # ------------------------------------------------------------------ #
 
-    def _dispatch_completion(self, *, bundle: ModelBundle, payload: dict[str, Any]) -> Any:
+    def _dispatch_completion(self, *, bundle: ModelBundle, payload: dict[str, Any],
+                             attempt_budget: dict[str, int] | None = None) -> Any:
         try:
             logger.debug(
                 "SEND model=%s tools=%s response_format=%s",
@@ -1530,23 +1606,32 @@ class RuntimeCore:
         except Exception:
             pass
         attempt = 0
+        attempt_budget = attempt_budget if attempt_budget is not None else {"remaining": self.runtime_policy.http_attempts}
         while True:
             attempt += 1
             try:
-                return self._attempt_completion(bundle=bundle, payload=payload, attempt=attempt)
+                return self._attempt_completion(bundle=bundle, payload=payload, attempt=attempt, attempt_budget=attempt_budget)
             except TransientLLMError:
                 # 429 / 5xx / 超时是瞬时的：多试一次能救回一整轮回复
                 # （2026-09-13 一次限流风暴里 61/111 轮直接吞回答）。
                 self._add_metric("llm_http_retry")
-                if attempt < self.runtime_policy.http_attempts:
+                if attempt < self.runtime_policy.http_attempts and attempt_budget["remaining"] > 0:
                     if self.runtime_policy.retry_backoff_seconds:
                         time.sleep(self.runtime_policy.retry_backoff_seconds * attempt)
                     continue
                 raise
 
-    def _attempt_completion(self, *, bundle: ModelBundle, payload: dict[str, Any], attempt: int) -> Any:
+    def _attempt_completion(self, *, bundle: ModelBundle, payload: dict[str, Any], attempt: int,
+                            attempt_budget: dict[str, int] | None = None) -> Any:
+        from shinku.agent.budget import TaskBudgetExceeded, metered_completion
+        attempt_budget = attempt_budget if attempt_budget is not None else {"remaining": self.runtime_policy.http_attempts}
+        def send(request_payload):
+            if attempt_budget["remaining"] <= 0:
+                raise RuntimeError("llm_transport_attempt_limit")
+            attempt_budget["remaining"] -= 1
+            return metered_completion(bundle.client.chat.completions.create, request_payload)
         try:
-            result = bundle.client.chat.completions.create(**payload)
+            result = send(payload)
             try:
                 from shinku.llm.circuit_breaker import get_llm_circuit_breaker
 
@@ -1557,7 +1642,7 @@ class RuntimeCore:
         except TypeError:
             stripped = self._strip_cache_hints(payload)
             if stripped != payload:
-                result = bundle.client.chat.completions.create(**stripped)
+                result = send(stripped)
                 try:
                     from shinku.llm.circuit_breaker import get_llm_circuit_breaker
 
@@ -1565,6 +1650,8 @@ class RuntimeCore:
                 except Exception:
                     pass
                 return result
+            raise
+        except TaskBudgetExceeded:
             raise
         except Exception as exc:
             if attempt < self.runtime_policy.http_attempts and is_retryable_llm_error(exc):
@@ -1603,7 +1690,7 @@ class RuntimeCore:
             if self._retry_without_cache_hints(exc):
                 stripped = self._strip_cache_hints(payload)
                 if stripped != payload:
-                    return bundle.client.chat.completions.create(**stripped)
+                    return send(stripped)
             raise
 
     def _strip_cache_hints(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1876,6 +1963,16 @@ class RuntimeCore:
         elif speech:
             recovered["speech"] = speech
             recovered["speech_segments"] = []
+        if (speech or segments) and recovered.pop("_agent_transport_fallback", False) is True:
+            # Real recovered speech takes precedence over the local failure
+            # template. Emotion/media metadata alone must not authorize it.
+            recovered.pop("text", None)
+            if recovered.pop("_agent_plain_text_verify", False) is True and recovered.get("task_outcome") == "failed":
+                explicit_outcome = self._read_json_value(text, "task_outcome") or self._read_json_value(text, "outcome")
+                if isinstance(explicit_outcome, str) and explicit_outcome.strip():
+                    recovered["task_outcome"] = explicit_outcome.strip().lower()
+                else:
+                    recovered.pop("task_outcome", None)
         return recovered
 
     def _read_json_value(self, text: str, key: str) -> Any:
@@ -1888,11 +1985,10 @@ class RuntimeCore:
             start = self._skip_ws(raw, match.end())
             if start >= len(raw):
                 continue
-            end = self._scan_json_value_end(raw, start)
-            if end is None:
-                continue
             try:
-                return json.loads(raw[start:end])
+                # A complete scalar (e.g. task_outcome) is recoverable too;
+                # the compound-value scanner only recognizes arrays/objects.
+                return json.JSONDecoder().raw_decode(raw[start:])[0]
             except Exception:
                 continue
         return None

@@ -6,7 +6,8 @@ from dataclasses import dataclass, replace
 import threading
 from typing import Any, Mapping
 
-from .attention import AttentionBatch, AttentionBatcher, AttentionDecision, AttentionPolicy
+from .attention import AttentionBatch, AttentionBatcher, AttentionDecision, AttentionPolicy, AutonomousAttentionTracker
+from .attention_trace import AttentionTraceStore
 from .commands import QQCommandState
 from .group_context import GroupContextTracker
 from .ingress_guard import IngressAdmission, IngressPolicy
@@ -55,12 +56,16 @@ class QQIngressAdapter:
         batcher: AttentionBatcher | None = None,
         ingress_policy: IngressPolicy | None = None,
         group_context: GroupContextTracker | None = None,
+        attention_trace_store: AttentionTraceStore | None = None,
+        autonomous_tracker: AutonomousAttentionTracker | None = None,
     ) -> None:
         self.route_policy = route_policy or ReplyRoutePolicy.from_environment()
-        self.attention_policy = attention_policy or AttentionPolicy()
+        self.attention_policy = attention_policy or AttentionPolicy.from_environment()
         self.batcher = batcher or AttentionBatcher()
         self.ingress_policy = ingress_policy or IngressPolicy.from_environment()
         self.group_context = group_context or GroupContextTracker()
+        self.attention_trace_store = attention_trace_store or AttentionTraceStore()
+        self.autonomous_tracker = autonomous_tracker or AutonomousAttentionTracker()
         self._seen_event_fingerprints: dict[str, float] = {}
         self._ingress_lock = threading.RLock()
         self.command_state: QQCommandState | None = None
@@ -73,12 +78,18 @@ class QQIngressAdapter:
             self.attention_policy = replace(
                 self.attention_policy,
                 autonomous_enabled_getter=None,
+                autonomous_enabled_for_message_getter=None,
                 response_enabled_getter=None,
             )
             return
         self.attention_policy = replace(
             self.attention_policy,
             autonomous_enabled_getter=state.is_autonomous_reply_enabled,
+            autonomous_enabled_for_message_getter=lambda message: state.is_autonomous_reply_enabled(
+                message.conversation_id
+                if str(message.conversation_type or "").casefold() in {"group", "guild"}
+                else ""
+            ),
             response_enabled_getter=state.responses_enabled,
         )
 
@@ -108,6 +119,14 @@ class QQIngressAdapter:
         if not admission.accepted:
             route = RouteDecision(False, admission.reason)
             attention = AttentionDecision(False, False, 0, admission.reason)
+            self._record_attention_trace(
+                message,
+                at=at,
+                admission=admission,
+                route=route,
+                attention=attention,
+                queued=False,
+            )
             return QQIngressResult(
                 message=message,
                 route=route,
@@ -116,10 +135,31 @@ class QQIngressAdapter:
                 admitted=False,
                 admission=admission,
             )
-        route = self.route_policy.decide(message)
-        self.group_context.enrich(message, route, now=float(at))
-        attention = self.attention_policy.evaluate(message, route)
-        closed_batch = self.batcher.push(message, attention, at=at)
+        with self._ingress_lock:
+            route = self.route_policy.decide(message)
+            signals = self.autonomous_tracker.signals(message, now=float(at))
+            recent = tuple(self.group_context.snapshot(message.conversation_id, now=float(at)))
+            other_focus = self.group_context.focus_snapshot(message.conversation_id, now=float(at))
+            attention = self.attention_policy.evaluate(
+                message, route, signals=signals, recent=recent, other_focus=other_focus, now=float(at),
+            )
+            self.autonomous_tracker.observe(message, route, attention, now=float(at))
+            self.group_context.enrich(
+                message,
+                route,
+                now=float(at),
+                include_context=attention.should_schedule,
+            )
+            closed_batch = self.batcher.push(message, attention, at=at)
+            self._record_attention_trace(
+                message,
+                at=at,
+                admission=admission,
+                route=route,
+                attention=attention,
+                queued=attention.should_schedule,
+                closed_batch=closed_batch,
+            )
         return QQIngressResult(
             message=message,
             route=route,
@@ -129,5 +169,66 @@ class QQIngressAdapter:
             admission=admission,
         )
 
+    def note_group_reply(
+        self, conversation_id: str, *, recipient_ids: tuple[str, ...],
+        message_ids: tuple[str, ...], autonomous: bool, at: float,
+    ) -> None:
+        """Count a turn only after transport confirms at least one segment."""
+
+        with self._ingress_lock:
+            self.autonomous_tracker.note_delivered(
+                conversation_id, recipient_ids=recipient_ids, message_ids=message_ids,
+                autonomous=autonomous, now=float(at),
+            )
+
+    def _record_attention_trace(
+        self,
+        message: IncomingMessage,
+        *,
+        at: float,
+        admission: IngressAdmission,
+        route: RouteDecision,
+        attention: AttentionDecision,
+        queued: bool,
+        closed_batch: AttentionBatch | None = None,
+    ) -> None:
+        """Record diagnostics without letting observability affect ingress."""
+
+        raw = message.raw_event if isinstance(message.raw_event, Mapping) else {}
+        topic = raw.get("_shinku_group_context")
+        topic = topic if isinstance(topic, Mapping) else {}
+        topic_items = topic.get("items")
+        topic_items = topic_items if isinstance(topic_items, (list, tuple)) else ()
+        try:
+            self.attention_trace_store.record(
+                observed_at=float(at),
+                conversation_id=message.conversation_id,
+                conversation_type=message.conversation_type,
+                message_id=message.message_id,
+                sender_id=message.sender_id,
+                text_chars=len(str(message.text or "")),
+                has_media=message.has_media,
+                is_poke=message.is_poke,
+                admission={"accepted": admission.accepted, "reason": admission.reason},
+                route=route.as_dict(),
+                attention=attention.as_dict(),
+                queued=queued,
+                closed_batch_size=len(closed_batch.messages) if closed_batch is not None else 0,
+                closed_batch_primary_message_id=(
+                    closed_batch.primary_message.message_id if closed_batch is not None else ""
+                ),
+                topic_state={
+                    "reply_message_count": len(message.reply_message_ids),
+                    "group_context_count": len(topic_items),
+                    "group_context_reason": str(topic.get("reason") or "")[:80],
+                    "group_context_focus": bool(topic.get("focus")),
+                    "current_at_target_count": len(message.at_targets),
+                },
+            )
+        except Exception:
+            # Diagnostics are best-effort and must never change reply behavior.
+            return
+
     def flush(self) -> AttentionBatch | None:
-        return self.batcher.flush()
+        with self._ingress_lock:
+            return self.batcher.flush()

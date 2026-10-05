@@ -57,7 +57,15 @@ def _capability_rows(assembly: Any) -> list[dict[str, Any]]:
     registry = getattr(host, "registry", None)
     names = _safe_call(getattr(registry, "names", None), ())
     policy = getattr(bridge, "policy", None)
-    allowed = set(getattr(bridge, "allowed_tool_names", set()) or set())
+    state = getattr(bridge, "command_state", None)
+    permission_mode = str(_safe_call(getattr(state, "permission_mode", None), "traditional") or "traditional")
+    effective_policy = _safe_call(
+        lambda: bridge._policy_for_permission_mode(permission_mode),
+        policy,
+    ) if bridge is not None else policy
+    active_tools = _safe_call(getattr(bridge, "_configured_tools_for_mode", None), None)
+    configured = set(getattr(bridge, "allowed_tool_names", set()) or set())
+    allowed = set(active_tools) if isinstance(active_tools, (set, frozenset, list, tuple)) else configured
     rows: list[dict[str, Any]] = []
     for name in names if isinstance(names, (list, tuple, set)) else ():
         handler = _safe_call(lambda current=name: registry.get(current), None)
@@ -70,13 +78,18 @@ def _capability_rows(assembly: Any) -> list[dict[str, Any]]:
             if isinstance(raw_schema, Mapping):
                 schema = {str(key): value for key, value in raw_schema.items() if str(key) not in {"x-secret", "secret"}}
         risk = str(policy.risk_of(name) if policy is not None and callable(getattr(policy, "risk_of", None)) else "unknown")
+        permission_class = str(getattr(handler, "agent_permission_class", "") or "").strip().lower()
+        if not permission_class:
+            permission_class = "read" if str(getattr(handler, "agent_progress_class", "") or "").lower() == "observe" else "change"
         rows.append(
             {
                 "name": str(name),
                 "description": description,
                 "risk": risk,
-                "requires_approval": bool(policy.requires_approval(name)) if policy is not None and callable(getattr(policy, "requires_approval", None)) else None,
-                "allowlisted": not allowed or str(name) in allowed,
+                "permission_mode": permission_mode,
+                "permission_class": permission_class,
+                "requires_approval": bool(effective_policy.requires_approval(name)) if effective_policy is not None and callable(getattr(effective_policy, "requires_approval", None)) else None,
+                "allowlisted": (not allowed and not configured) or str(name) in allowed,
                 "input_schema": schema,
             }
         )

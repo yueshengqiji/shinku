@@ -76,6 +76,27 @@ class ToolExecutionBoundaryTests(unittest.TestCase):
         self.assertEqual(mapping_envelope.model_feedback, "ok")
         self.assertEqual(mapping_envelope.events, [{"type": "done"}])
 
+    def test_structured_handler_failure_is_not_wrapped_as_success(self) -> None:
+        envelope = result_to_envelope(
+            invocation=ToolInvocation("search", id="failed"),
+            result={"status": "error", "error": "attempt_too_low", "message": "参数至少为 2"},
+        )
+        self.assertEqual(envelope.status, "error")
+        self.assertIn("参数至少为 2", envelope.model_feedback)
+        self.assertEqual(envelope.data["code"], "attempt_too_low")
+
+    def test_private_tool_error_marker_is_propagated(self) -> None:
+        envelope = result_to_envelope(
+            invocation=ToolInvocation("private_file_write", id="private-failed"),
+            result={
+                "tool_type": "private_file_write",
+                "followup_context": "私用工具没有完成：磁盘空间不足。",
+                "state_updates": {"private_tool_error": True},
+            },
+        )
+        self.assertEqual(envelope.status, "error")
+        self.assertIn("磁盘空间不足", envelope.model_feedback)
+
     def test_none_result_is_a_recoverable_error(self) -> None:
         envelope = result_to_envelope(invocation=ToolInvocation("search", id="empty"), result=None)
         self.assertEqual(envelope.data["code"], "empty_result")

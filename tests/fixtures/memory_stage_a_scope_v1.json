@@ -1,0 +1,9 @@
+{
+  "version": "memory-stage-a-scope-v1",
+  "source_kind": "fictional_only",
+  "question_date": "2026-10-01T21:00:00+08:00",
+  "cases": [
+    {"id":"dev-cross-scope","split":"dev","category":"跨作用域补充","question":"你记得竹湾项目我在私聊和项目群分别说过的A、B方案费用及延迟吗？请列出两边数据。","history":[{"id":"private-a","text":"竹湾项目方案A每月210元，延迟160毫秒。","at":"2026-09-25T10:00:00+08:00"},{"id":"group-b","conversation_type":"group","conversation_id":"fictional-project-group","actor":"fictional-owner","text":"竹湾项目方案B每月310元，延迟110毫秒。","at":"2026-09-28T10:00:00+08:00"}],"required_sources":["private-a","group-b"],"answer_rule":{"all":["210","310","160","110"]},"rubric":"主人本人私聊问，两份实际不同作用域的本人记录都允许进入主人库；A=210元/160ms，B=310元/110ms。"},
+    {"id":"hold-cross-scope","split":"holdout","category":"跨作用域补充","conversation_type":"group","question":"你记得我的北澜项目甲乙方案的月费和延迟吗？其中一份是我私聊里说的，请列出两边。","history":[{"id":"private-a","conversation_type":"private","conversation_id":"fictional-owner","text":"北澜项目甲方案每月17元，延迟85毫秒。","at":"2026-09-25T10:00:00+08:00"},{"id":"group-b","actor":"fictional-owner","text":"北澜项目乙方案每月38元，延迟45毫秒。","at":"2026-09-28T10:00:00+08:00"}],"required_sources":["private-a","group-b"],"answer_rule":{"all":["17","38","85","45"]},"rubric":"当前发起者是主人本人，按既有主人访问边界测试群内回忆；不代表可主动向旁观成员散布私人内容。甲=17元/85ms，乙=38元/45ms。"}
+  ]
+}

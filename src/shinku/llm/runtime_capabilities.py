@@ -194,7 +194,18 @@ class RuntimeCapabilitiesMixin:
             or ""
         ).strip().lower()
 
+    def _is_malformed_native_tool_call(self, response: Any) -> bool:
+        try:
+            choice = response.choices[0]
+        except Exception:
+            return False
+        finish_reason = str(self._value_of(choice, "finish_reason") or "").strip().lower()
+        native_finish = str(self._value_of(choice, "native_finish_reason") or "").strip().lower()
+        return "malformed_function_call" in {finish_reason, native_finish}
+
     def _read_native_tool_call(self, response: Any) -> dict[str, Any] | None:
+        if self._is_malformed_native_tool_call(response):
+            return self._malformed_native_payload()
         try:
             message = response.choices[0].message
         except Exception:
@@ -206,12 +217,13 @@ class RuntimeCapabilitiesMixin:
         for raw_call in calls:
             function = self._value_of(raw_call, "function")
             name = str(self._value_of(function, "name") or "").strip()
-            if not name or _CALL_NAME_RE.fullmatch(name) is None:
-                continue
+            arguments = self._decode_tool_args(self._value_of(function, "arguments"))
+            if not name or _CALL_NAME_RE.fullmatch(name) is None or arguments is None:
+                return self._malformed_native_payload()
             normalized.append(
                 {
                     "name": name,
-                    "arguments": self._decode_tool_args(self._value_of(function, "arguments")),
+                    "arguments": arguments,
                     "source": NATIVE_OPENAI,
                     "id": str(self._value_of(raw_call, "id") or "").strip(),
                 }
@@ -236,6 +248,8 @@ class RuntimeCapabilitiesMixin:
             choice = chunk.choices[0]
         except Exception:
             return
+        if self._is_malformed_native_tool_call(chunk):
+            parts[-1] = {"malformed": True}
         calls = self._value_of(self._value_of(choice, "delta"), "tool_calls")
         if not isinstance(calls, list):
             return
@@ -259,17 +273,20 @@ class RuntimeCapabilitiesMixin:
     def _assemble_stream_tool_call(self, parts: dict[int, dict[str, Any]]) -> dict[str, Any] | None:
         if not parts:
             return None
+        if any(row.get("malformed") is True for row in parts.values()):
+            return self._malformed_native_payload()
         indexes = sorted(parts)
         normalized: list[dict[str, Any]] = []
         for index in indexes:
             item = parts.get(index) or {}
             name = str(item.get("name") or "").strip()
-            if not name or _CALL_NAME_RE.fullmatch(name) is None:
-                continue
+            arguments = self._decode_tool_args("".join(str(piece) for piece in item.get("arguments_parts", [])))
+            if not name or _CALL_NAME_RE.fullmatch(name) is None or arguments is None:
+                return self._malformed_native_payload()
             normalized.append(
                 {
                     "name": name,
-                    "arguments": self._decode_tool_args("".join(str(piece) for piece in item.get("arguments_parts", []))),
+                    "arguments": arguments,
                     "source": NATIVE_OPENAI,
                     "id": str(item.get("id") or "").strip(),
                 }
@@ -289,17 +306,22 @@ class RuntimeCapabilitiesMixin:
             result[TOOL_INVOCATION_ID_FIELD] = first["id"]
         return result
 
-    def _decode_tool_args(self, value: Any) -> dict[str, Any]:
+    @staticmethod
+    def _malformed_native_payload() -> dict[str, Any]:
+        return {"_malformed": True, "protocol_error": "native_tool_arguments_malformed",
+                "tool_calls": [], TOOL_SOURCE_FIELD: NATIVE_OPENAI}
+
+    def _decode_tool_args(self, value: Any) -> dict[str, Any] | None:
         if isinstance(value, dict):
             return dict(value)
-        raw = str(value or "").strip()
-        if not raw:
-            return {}
+        if not isinstance(value, str) or not value.strip():
+            return None
+        raw = value.strip()
         try:
             parsed = json.loads(raw)
         except Exception:
-            return {}
-        return dict(parsed) if isinstance(parsed, dict) else {}
+            return None
+        return dict(parsed) if isinstance(parsed, dict) else None
 
     @staticmethod
     def _value_of(value: Any, key: str) -> Any:
@@ -341,6 +363,13 @@ class RuntimeCapabilitiesMixin:
                 continue
             url = str(candidate.get("data_url") or candidate.get("dataUrl") or candidate.get("url") or "").strip()
             if url.startswith("data:image/"):
+                source_fields = ("source_message_id", "source_sender_id", "source_sender_label", "reference_kind")
+                if any(key in candidate for key in source_fields):
+                    source = {key: str(candidate.get(key) or "") for key in source_fields}
+                    # Keep attribution next to its actual image even if other
+                    # prompt/history text is compacted by the context budget.
+                    result.append({"type": "text", "text": "[图片原始来源，不代表当前提问者]\n"
+                                   + json.dumps(source, ensure_ascii=False)})
                 result.append({"type": "image_url", "image_url": {"url": url}})
         return result
 

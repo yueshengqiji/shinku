@@ -23,19 +23,19 @@ def build_agent_work_router(coordinator: AgentTaskCoordinator) -> APIRouter:
     router = APIRouter()
 
     @router.get("/agent-work/tasks", response_model=None)
-    def list_tasks(request: Request, profile_user_id: str = "", limit: int = 50) -> JSONResponse:
+    def list_tasks(request: Request, profile_user_id: str = "", session_id: str = "", limit: int = 50) -> JSONResponse:
         if not _local_only(request):
             return JSONResponse({"ok": False, "reason": "local_request_required"}, status_code=403)
         return JSONResponse(
-            {"ok": True, "tasks": coordinator.list(profile_user_id=profile_user_id, limit=limit)},
+            {"ok": True, "tasks": coordinator.list(profile_user_id=profile_user_id, session_id=session_id, limit=limit)},
             headers={"Cache-Control": "no-store"},
         )
 
     @router.get("/agent-work/tasks/{task_id}", response_model=None)
-    def get_task(task_id: str, request: Request, profile_user_id: str = "") -> JSONResponse:
+    def get_task(task_id: str, request: Request, profile_user_id: str = "", session_id: str = "") -> JSONResponse:
         if not _local_only(request):
             return JSONResponse({"ok": False, "reason": "local_request_required"}, status_code=403)
-        task = coordinator.get(task_id, profile_user_id=profile_user_id)
+        task = coordinator.get(task_id, profile_user_id=profile_user_id, session_id=session_id)
         if task is None:
             return JSONResponse({"ok": False, "reason": "task_not_found"}, status_code=404)
         return JSONResponse({"ok": True, "task": task}, headers={"Cache-Control": "no-store"})
@@ -48,7 +48,8 @@ def build_agent_work_router(coordinator: AgentTaskCoordinator) -> APIRouter:
         except Exception:
             payload = {}
         profile_user_id = str(payload.get("profile_user_id") or "") if isinstance(payload, dict) else ""
-        result = coordinator.control(action, task_id, profile_user_id)
+        session_id = str(payload.get("session_id") or "") if isinstance(payload, dict) else ""
+        result = coordinator.control(action, task_id, profile_user_id, session_id=session_id)
         return JSONResponse(result, status_code=200 if result.get("ok") else 409, headers={"Cache-Control": "no-store"})
 
     @router.post("/agent-work/tasks/{task_id}/cancel", response_model=None)

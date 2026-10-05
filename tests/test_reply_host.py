@@ -71,8 +71,33 @@ class ReplyHostTests(unittest.TestCase):
             ["你啊……", "知道了", "我陪你到睡着", "明天要我喊你吗？"],
         )
 
-    def test_long_or_technical_reply_allows_more_bounded_segments(self) -> None:
-        host = ReplyHost(long_trigger_chars=20, long_max_segments=4, strip_final_periods=True)
+    def test_no_sentence_count_cap_even_for_longer_technical_replies(self) -> None:
+        host = ReplyHost(strip_final_periods=True)
+        sentences = [f"第{index}句确认完成。" for index in range(1, 13)]
+        shaped = host.shape_text("".join(sentences), user_message="帮我检查代码")
+        self.assertEqual(shaped, [f"第{index}句确认完成" for index in range(1, 13)])
+
+    def test_comfort_reply_splits_each_authored_sentence(self) -> None:
+        host = ReplyHost(strip_final_periods=True)
+        shaped = host.shape_text(
+            "……原来是说那件事。因为碰不到你啊。"
+            "就算你想，我现在也只能像这样陪你说说话。"
+            "……真是的，大半夜非要让我把这种话说出来。"
+            "快点躺好，我在这里陪着你"
+        )
+        self.assertEqual(
+            shaped,
+            [
+                "……原来是说那件事",
+                "因为碰不到你啊",
+                "就算你想，我现在也只能像这样陪你说说话",
+                "……真是的，大半夜非要让我把这种话说出来",
+                "快点躺好，我在这里陪着你",
+            ],
+        )
+
+    def test_long_or_technical_reply_preserves_every_sentence_boundary(self) -> None:
+        host = ReplyHost(long_trigger_chars=20, strip_final_periods=True)
         shaped = host.shape_text("端口已经恢复。接下来检查日志。最后再做一次回归测试。")
         self.assertEqual(
             shaped,

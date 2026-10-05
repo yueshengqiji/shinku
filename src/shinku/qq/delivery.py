@@ -9,7 +9,7 @@ from typing import Any, Protocol
 __all__ = ["DeliveryResult", "DeliveryTransport", "OutgoingMessage", "OutgoingSegment", "build_reply"]
 
 
-_ALLOWED_KINDS = frozenset({"text", "image", "file", "audio", "video", "reply"})
+_ALLOWED_KINDS = frozenset({"text", "image", "file", "audio", "video", "reply", "at"})
 
 
 @dataclass(frozen=True)
@@ -20,12 +20,17 @@ class OutgoingSegment:
     local_path: str = ""
     media_id: str = ""
     payload: dict[str, Any] = field(default_factory=dict)
+    target_id: str = ""
 
     def __post_init__(self) -> None:
         if str(self.kind or "").strip().lower() not in _ALLOWED_KINDS:
             raise ValueError("unsupported outgoing segment kind")
         if self.kind == "text" and not str(self.text or "").strip():
             raise ValueError("outgoing text segment cannot be empty")
+        if self.kind == "at":
+            target_id = str(self.target_id or "").strip()
+            if not target_id.isascii() or not target_id.isdecimal():
+                raise ValueError("outgoing at segment needs a numeric QQ user id")
         if self.kind in {"image", "file", "audio", "video"} and not any(
             str(value or "").strip() for value in (self.url, self.local_path, self.media_id)
         ):
@@ -38,6 +43,7 @@ class OutgoingSegment:
             ("url", self.url),
             ("local_path", self.local_path),
             ("media_id", self.media_id),
+            ("target_id", self.target_id),
         ):
             if str(value or "").strip():
                 result[key] = str(value)
@@ -58,8 +64,10 @@ class OutgoingMessage:
             raise ValueError("conversation_id is required")
         if not self.segments:
             raise ValueError("outgoing message needs at least one segment")
-        if str(self.conversation_type or "unknown").strip().lower() not in {"private", "group", "guild", "unknown"}:
+        if str(self.conversation_type or "unknown").strip().lower() not in {"private", "group", "guild", "unknown", "desktop"}:
             raise ValueError("unsupported conversation type")
+        if any(segment.kind == "at" for segment in self.segments) and str(self.conversation_type or "").strip().lower() != "group":
+            raise ValueError("outgoing at segments are only supported in group conversations")
 
     def as_dict(self) -> dict[str, Any]:
         result = {
@@ -82,6 +90,7 @@ class DeliveryResult:
     status: str
     message_ids: tuple[str, ...] = ()
     error: str = ""
+    definitive_not_sent: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -132,13 +141,13 @@ def deliver(transport: DeliveryTransport, message: OutgoingMessage) -> DeliveryR
     """调用一次外部 transport；不生成替代文本，不拆分图片和文字。"""
 
     if not callable(getattr(transport, "send", None)):
-        return DeliveryResult(False, "transport_invalid", error="delivery_transport_invalid")
+        return DeliveryResult(False, "transport_invalid", error="delivery_transport_invalid", definitive_not_sent=True)
     try:
         raw = transport.send(message)
     except Exception as exc:
         return DeliveryResult(False, "transport_error", error=type(exc).__name__)
-    if not isinstance(raw, Mapping) or raw.get("ok") is False:
-        return DeliveryResult(False, "rejected", error=str((raw or {}).get("error") or "delivery_rejected") if isinstance(raw, Mapping) else "delivery_rejected")
+    if not isinstance(raw, Mapping):
+        return DeliveryResult(False, "rejected", error="delivery_rejected")
     raw_ids = raw.get("message_ids", raw.get("message_id", ()))
     if isinstance(raw_ids, str):
         ids = (raw_ids,) if raw_ids.strip() else ()
@@ -146,6 +155,10 @@ def deliver(transport: DeliveryTransport, message: OutgoingMessage) -> DeliveryR
         ids = tuple(str(item).strip() for item in raw_ids if str(item).strip())
     else:
         ids = ()
+    if raw.get("ok") is False:
+        return DeliveryResult(False, "partial" if ids else "rejected", message_ids=ids,
+            error=str(raw.get("error") or "delivery_rejected"),
+            definitive_not_sent=not ids and raw.get("definitive_not_sent") is True)
     return DeliveryResult(True, "sent", message_ids=ids)
 
 

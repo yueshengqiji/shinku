@@ -41,6 +41,27 @@ class AttentionPolicyTests(unittest.TestCase):
         self.assertEqual(hit.evaluate(message, route).reason, "autonomous_probability_hit")
         self.assertEqual(miss.evaluate(message, route).reason, "autonomous_probability_miss")
 
+    def test_autonomous_probability_reads_environment_and_is_bounded(self) -> None:
+        self.assertEqual(
+            AttentionPolicy.from_environment({"SHINKU_QQ_AUTONOMOUS_REPLY_PROBABILITY": "0.12"}).autonomous_probability,
+            0.12,
+        )
+        self.assertEqual(
+            AttentionPolicy.from_environment({"SHINKU_QQ_AUTONOMOUS_REPLY_PROBABILITY": "2"}).autonomous_probability,
+            1.0,
+        )
+        self.assertEqual(
+            AttentionPolicy.from_environment({"SHINKU_QQ_AUTONOMOUS_REPLY_PROBABILITY": "invalid"}).autonomous_probability,
+            0.0,
+        )
+
+    def test_ingress_adapter_reads_configured_autonomous_probability(self) -> None:
+        from shinku.qq.adapter import QQIngressAdapter
+
+        with mock.patch.dict("os.environ", {"SHINKU_QQ_AUTONOMOUS_REPLY_PROBABILITY": "0.12"}):
+            adapter = QQIngressAdapter()
+        self.assertEqual(adapter.attention_policy.autonomous_probability, 0.12)
+
 
 class AttentionBatcherTests(unittest.TestCase):
     def test_default_window_can_be_overridden_by_environment(self) -> None:

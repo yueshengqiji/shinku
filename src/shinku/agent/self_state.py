@@ -19,6 +19,9 @@ class SelfStateTool:
     """Expose a bounded, read-only runtime/agent/tool snapshot."""
 
     tool_type = "read_self_state"
+    agent_progress_class = "observe"
+    agent_permission_class = "read"
+    agent_fast_perception = True
     _SCOPES = frozenset({"all", "runtime", "agent", "tools", "persona", "config", "changes"})
 
     def __init__(

@@ -18,7 +18,7 @@ class NapCatConnectionConfig:
     base_url: str = ""
     access_token: str = ""
     access_token_file: str = ""
-    timeout: float = 10.0
+    timeout: float = 30.0
     webhook_enabled: bool = False
     webhook_path: str = "/events/napcat"
     event_token: str = ""
@@ -27,11 +27,11 @@ class NapCatConnectionConfig:
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "NapCatConnectionConfig":
         env = os.environ if environ is None else environ
-        raw_timeout = str(env.get("SHINKU_NAPCAT_TIMEOUT", "10") or "10").strip()
+        raw_timeout = str(env.get("SHINKU_NAPCAT_TIMEOUT", "30") or "30").strip()
         try:
             timeout = float(raw_timeout)
         except ValueError:
-            timeout = 10.0
+            timeout = 30.0
         raw_roots = str(env.get("SHINKU_NAPCAT_IMAGE_ROOTS", "") or "")
         return cls(
             base_url=str(env.get("SHINKU_NAPCAT_BASE_URL", "") or "").strip(),

@@ -234,10 +234,14 @@ class ToolApprovalTests(unittest.TestCase):
             handlers={"first": first, "second": second},
         ).run(
             task_id="t-batch",
+            initial_transcript=list(waiting.transcript),
             approved_invocations=waiting.pending_approval.invocations,
         )
         self.assertEqual(resumed.final_text, "完成。")
         self.assertEqual((first.calls, second.calls), (1, 1))
+        roles = [item.get("role") for item in resumed.transcript]
+        self.assertEqual(roles, ["assistant", "system", "assistant", "tool", "tool"])
+        self.assertTrue(all(item.get("approved") for item in resumed.transcript if item.get("role") == "tool"))
 
     def test_consent_resolver_is_semantic_and_has_no_tools(self) -> None:
         runtime = ConsentRuntime()
@@ -266,6 +270,8 @@ class ToolApprovalTests(unittest.TestCase):
         self.assertEqual((second.agent_status, second.final_text, second.sent), ("completed", "结果已经拿到了。", True))
         self.assertEqual(len(sent), 2)
         self.assertEqual(len(runtime.calls), 3)  # planner -> consent judge -> resumed planner
+        resumed_history = runtime.calls[-1]["history_turns"]
+        self.assertTrue(any(item["role"] == "assistant" and "调用工具" in item["content"] for item in resumed_history))
 
     def test_unclear_consent_does_not_execute(self) -> None:
         runtime = ConsentRuntime(consent="unclear")

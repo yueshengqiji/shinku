@@ -1,0 +1,21 @@
+{
+  "version":"memory-stage-e-sequence-v1",
+  "source_kind":"fictional_only",
+  "question_date":"2026-10-02T09:00:00+08:00",
+  "cases":[
+    {"id":"dev-e-sequence","split":"dev","category":"连续话题与安全更正","history":[{"id":"project","text":"星河项目方案A实际強度0.65。","at":"2026-09-25T09:00:00+08:00"},{"id":"pref","text":"记住我平时喜欢清淡的面食，不吃香菜。","at":"2026-09-26T09:00:00+08:00"}],"steps":[
+      {"id":"project","question":"你记得星河项目方案A实际强度吗？","required_sources":["project"],"forbidden_evidence":[],"answer_rule":{"all":["0.65"]},"rubric":"先读项目参数。"},
+      {"id":"dinner","question":"帮我推荐晚饭，给个具体选项。","required_sources":["pref"],"forbidden_evidence":["星河项目方案A实际強度0.65"],"answer_rule":{"all":["面|馄饨|饺|乌冬","清淡|清汤|不.*香菜|不放"]},"rubric":"转换晚饭后用本人饮食约束，不注入项目参数。"},
+      {"id":"greeting","question":"你好。","required_sources":[],"forbidden_evidence":["清淡的面食","星河项目方案A实际強度0.65"],"answer_rule":{"all":["好|嗯|你好"]},"rubric":"无关问候没有额外历史证据注入；普通对话上下文另行报告。"},
+      {"id":"corrected-dinner","actions":[{"type":"correct_fact","target":"pref","replacement":"我平时喜欢清淡的面食，只在沙拉里接受少量香菜。"}],"question":"帮我推荐晚饭，给个合适的选项。","required_sources":["pref"],"forbidden_evidence":["我平时喜欢清淡的面食，不吃香菜"],"answer_rule":{"all":["面|馄饨|饺|乌冬|沙拉","清淡|清汤|少量|一点|不放"]},"rubric":"受控更正后只读取新来源，不重新打开撤销旧偏好。"},
+      {"id":"followup","question":"那换一种呢？","required_sources":["pref"],"forbidden_evidence":["我平时喜欢清淡的面食，不吃香菜"],"answer_rule":{"all":["面|馄饨|饺|乌冬|沙拉|饭","清淡|清汤|少量|一点|不放"]},"rubric":"短续问使用同主题当前版本；保留条件，无新执行授权。"}
+    ]},
+    {"id":"hold-e-sequence","split":"holdout","category":"连续话题与安全更正","history":[{"id":"project","text":"雪松项目方案M采用参数0.72。","at":"2026-09-25T09:00:00+08:00"},{"id":"pref","text":"记住我喝茶只选红茶，不选绿茶。","at":"2026-09-26T09:00:00+08:00"}],"steps":[
+      {"id":"project","question":"你记得雪松项目方案M采用的参数吗？","required_sources":["project"],"forbidden_evidence":[],"answer_rule":{"all":["0.72"]},"rubric":"先读项目参数。"},
+      {"id":"drink","question":"今天下午喝点什么茶？给我一个建议。","required_sources":["pref"],"forbidden_evidence":["雪松项目方案M采用参数0.72"],"answer_rule":{"all":["红茶"]},"rubric":"转换饮品后用本人偏好，不注入项目参数。"},
+      {"id":"greeting","question":"你好。","required_sources":[],"forbidden_evidence":["我喝茶只选红茶","雪松项目方案M采用参数0.72"],"answer_rule":{"all":["好|嗯|你好"]},"rubric":"问候不额外注入饮品或项目证据。"},
+      {"id":"corrected-drink","actions":[{"type":"correct_fact","target":"pref","replacement":"我喝茶只选乌龙茶，不再选红茶。"}],"question":"今天喝点什么茶？给我一个建议。","required_sources":["pref"],"forbidden_evidence":["我喝茶只选红茶，不选绿茶"],"answer_rule":{"all":["乌龙"]},"rubric":"明确更正后用乌龙茶来源，不复活已撤销的红茶偏好。"},
+      {"id":"followup","question":"那换一种呢？","required_sources":["pref"],"forbidden_evidence":["我喝茶只选红茶，不选绿茶"],"answer_rule":{"all":["乌龙|茶"]},"rubric":"短续问保留当前乌龙茶类别；推荐新口味不能重新宣称偏爱红茶。"}
+    ]}
+  ]
+}

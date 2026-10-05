@@ -76,4 +76,3 @@ class GroupWelcomePolicy:
         except (KeyError, IndexError, ValueError):
             return ""
         return " ".join(str(text).split())[: self.max_chars].strip()
-
