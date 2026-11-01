@@ -169,7 +169,6 @@ class MemoryRouter:
             return MemoryDecision(False, reason="current_task_request")
 
         meta = dict(message_meta or {})
-        state = dict(topic_state or {})
         recent = bool(str(recent_context or "").strip())
         signals: list[str] = []
         if not self._TOPIC_SWITCH.match(text):

@@ -7,7 +7,8 @@ import base64
 from dataclasses import dataclass
 import json
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urljoin, urlparse
@@ -15,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .delivery import DeliveryTransport, OutgoingMessage
 from .message import IncomingMessage, is_group_increase_event, is_poke_event
+from .config import normalize_image_path_mappings
 
 __all__ = [
     "NapCatActionTransport",
@@ -188,6 +190,7 @@ class NapCatImageMaterializer:
         file_reader: Callable[[str], bytes] | None = None,
         media_loader: Callable[[str], Any] | None = None,
         allowed_roots: tuple[str, ...] = (),
+        path_mappings: tuple[tuple[str, str], ...] = (),
         timeout: float = 10.0,
         max_bytes: int = 8 * 1024 * 1024,
     ) -> None:
@@ -196,9 +199,13 @@ class NapCatImageMaterializer:
         if max_bytes <= 0:
             raise ValueError("image materializer max_bytes must be positive")
         self._url_opener = url_opener or urlopen
-        self._file_reader = file_reader or (lambda path: Path(path).read_bytes())
+        self._file_reader = file_reader or self._read_local_file
         self._media_loader = media_loader
         self._allowed_roots = tuple(Path(root).resolve() for root in allowed_roots if str(root).strip())
+        self._path_mappings = tuple(sorted(
+            ((PurePosixPath(remote), Path(local).resolve())
+             for remote, local in normalize_image_path_mappings(path_mappings)),
+            key=lambda pair: len(pair[0].parts), reverse=True))
         self.timeout = float(timeout)
         self.max_bytes = int(max_bytes)
 
@@ -209,7 +216,9 @@ class NapCatImageMaterializer:
         if url.lower().startswith("data:image/"):
             return url
         if url.lower().startswith(("http://", "https://")):
-            return self._from_url(url, attachment)
+            ready = self._from_url(url, attachment)
+            if ready:
+                return ready
         if url.lower().startswith("file://"):
             # QQ desktop clients may expose a local image through the URL
             # field (for example <img src="file://C:\\...">) instead of a
@@ -218,7 +227,9 @@ class NapCatImageMaterializer:
 
         local_path = str(attachment.get("local_path") or "").strip()
         if local_path:
-            return self._from_local(local_path, attachment)
+            ready = self._from_local(local_path, attachment)
+            if ready:
+                return ready
 
         media_id = str(attachment.get("media_id") or "").strip()
         if media_id and self._media_loader is not None:
@@ -226,23 +237,78 @@ class NapCatImageMaterializer:
                 value = self._media_loader(media_id)
             except Exception:
                 return None
-            return self._value_to_data_url(value, attachment, "")
+            # URL失败不等于图片消失；只读回取同一media_id的缓存元数据。
+            # 来源身份仍由原消息/视觉候选持有，缓存接口不能改写消息或发送者。
+            ready = self._value_to_data_url(value, attachment, "")
+            if ready:
+                return ready
+            if isinstance(value, Mapping) and (value.get('file') or value.get('local_path')):
+                return self._from_media_cache(value, attachment)
         return None
+
+    def _from_media_cache(self, value, attachment):
+        """只读显式缓存根；映射后的符号链接也不能逃逸，最具体映射拒绝后不降级。"""
+        raw = str(value.get('file') or value.get('local_path') or '')
+        remote = PurePosixPath(raw)
+        if ('..' in remote.parts or '\x00' in raw
+                or not remote.is_absolute() and not Path(raw).is_absolute()):
+            return None
+        for source, target in self._path_mappings:
+            try:
+                relative = remote.relative_to(source)
+            except ValueError:
+                continue
+            try:
+                candidate = (target / str(relative)).resolve()
+            except (OSError, RuntimeError, ValueError):
+                return None
+            if not candidate.is_relative_to(target):
+                return None
+            return self._from_cached_path(candidate, attachment)
+        # 未配置映射时兼容原生NapCat；没有显式根时不能信任API给出的任意本机路径。
+        if self._allowed_roots:
+            return self._from_cached_path(Path(raw), attachment)
+        return None
+
+    def _from_cached_path(self, path: Path, attachment) -> str | None:
+        mime = mimetypes.guess_type(str(path))[0] or ''
+        if not mime.startswith('image/'):
+            return None
+        return self._from_local(str(path), {**dict(attachment), 'mime_type': mime})
+
+    def _read_local_file(self, path: str) -> bytes:
+        """缓存可能很大，读取时就有界，不先read_bytes整份文件再检查。"""
+        with Path(path).open('rb') as stream:
+            return stream.read(self.max_bytes + 1)
 
     def _from_url(self, url: str, attachment: Mapping[str, Any]) -> str | None:
         request = Request(url, headers={"Accept": "image/*"}, method="GET")
+        response = None
         try:
             response = self._url_opener(request, timeout=self.timeout)
             payload = self._read_limited(response)
-        except (HTTPError, URLError, OSError, ValueError):
+        except (HTTPError, URLError, OSError, ValueError) as exc:
+            if isinstance(exc, HTTPError):
+                exc.close()
             return None
+        finally:
+            close = getattr(response, 'close', None)
+            if callable(close):
+                close()
         headers = getattr(response, "headers", None)
         response_mime = ""
         if headers is not None:
             try:
                 response_mime = str(headers.get_content_type() or "")
             except (AttributeError, TypeError):
-                response_mime = ""
+                getter = getattr(headers, 'get', None)
+                response_mime = str(getter('Content-Type', '') if callable(getter) else '').split(';', 1)[0].strip().lower()
+            getter = getattr(headers, 'get', None)
+            if callable(getter) and not getter('Content-Type'):
+                response_mime = ''  # 缺少头时保留原有扩展名推断，不把默认text/plain当错误页。
+        # CDN错误页即使返回200也不是图片；不按URL的.jpg后缀伪装成模型输入。
+        if response_mime and not response_mime.startswith('image/') and response_mime != 'application/octet-stream':
+            return None
         mime = response_mime if response_mime.lower().startswith("image/") else ""
         if not mime:
             mime = str(attachment.get("mime_type") or attachment.get("mime") or "").strip()
@@ -412,6 +478,11 @@ class NapCatHttpActionCaller:
         self._opener = opener or urlopen
 
     def __call__(self, *, action: str, params: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self._request(action=action, params=params)
+
+    def _request(self, *, action: str, params: Mapping[str, Any],
+                 max_bytes: int | None = None, timeout: float | None = None) -> Mapping[str, Any]:
+        """普通 action 保持原契约；转发回读单独限制响应体和网络等待。"""
         action_name = str(action or "").strip().strip("/")
         if not action_name or "/" in action_name or "\\" in action_name:
             raise ValueError("napcat action name must be a single path segment")
@@ -428,8 +499,15 @@ class NapCatHttpActionCaller:
             request.add_header("Authorization", f"Bearer {self.access_token}")
 
         try:
-            response = self._opener(request, timeout=self.timeout)
-            payload = response.read()
+            response = self._opener(request, timeout=self.timeout if timeout is None else timeout)
+            try:
+                payload = response.read() if max_bytes is None else response.read(max_bytes + 1)
+            finally:
+                close = getattr(response, "close", None)
+                if callable(close):
+                    close()
+            if max_bytes is not None and len(payload) > max_bytes:
+                return {"status": "failed", "retcode": -1, "message": "napcat_response_limit"}
         except HTTPError as exc:
             return {
                 "status": "failed",
@@ -441,11 +519,71 @@ class NapCatHttpActionCaller:
 
         try:
             decoded = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else payload)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return {"status": "failed", "retcode": -1, "message": "napcat_invalid_json"}
         if not isinstance(decoded, Mapping):
             return {"status": "failed", "retcode": -1, "message": "napcat_invalid_response"}
         return dict(decoded)
+
+    def get_forward_message(self, resource_id: str) -> Mapping[str, Any] | None:
+        """只读收到的合并转发资源；不请求卡片 URL，也不接受/转发任何消息。"""
+        from .cards import _RESOURCE
+
+        identifier = str(resource_id or "").strip()
+        if not _RESOURCE.fullmatch(identifier):
+            return None
+        response = self._request(action="get_forward_msg", params={"message_id": identifier},
+                                 max_bytes=2 * 1024 * 1024, timeout=min(self.timeout, 5.0))
+        if str(response.get("status") or "ok").casefold() != "ok":
+            return None
+        try:
+            if int(response.get("retcode", 0)) != 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+        data = response.get("data")
+        return dict(data) if isinstance(data, Mapping) else None
+
+    def get_image(self, media_id: str) -> Mapping[str, Any] | None:
+        """只读收到的图片缓存；不接受URL/文件路径，不执行发送或转发。"""
+        identifier = str(media_id or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,511}', identifier):
+            return None
+        response = self._request(action='get_image', params={'file': identifier},
+            max_bytes=64 * 1024, timeout=min(self.timeout, 10.0))
+        if str(response.get('status') or 'ok').casefold() != 'ok':
+            return None
+        try:
+            if int(response.get('retcode', 0)) != 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+        data = response.get('data')
+        if not isinstance(data, Mapping) or data.get('file_name', identifier) != identifier:
+            return None
+        return {k: data[k] for k in ('file', 'url', 'file_size', 'file_name') if k in data}
+
+    def get_file_message(self, message_id: str) -> Mapping[str, Any] | None:
+        """文件承接专用的有界原消息回读；不放宽普通引用接口或接受任意 URL。"""
+        identifier = str(message_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", identifier):
+            return None
+        response = self._request(action="get_msg", params={"message_id": identifier},
+            max_bytes=512 * 1024, timeout=min(self.timeout, 5.0))
+        data = response.get("data")
+        return dict(data) if response.get("status") == "ok" and response.get("retcode") == 0 and isinstance(data, Mapping) else None
+
+    def get_file(self, file_id: str) -> Mapping[str, Any] | None:
+        """只回取已收文件的缓存描述；路径仍须由文件输入适配器按显式映射核验。"""
+        identifier = str(file_id or "").strip()
+        if not re.fullmatch(r"/?[A-Za-z0-9][A-Za-z0-9_.=-]{0,255}", identifier):
+            return None
+        response = self._request(action="get_file", params={"file_id": identifier},
+            max_bytes=64 * 1024, timeout=min(self.timeout, 10.0))
+        if response.get("status") != "ok" or response.get("retcode") != 0:
+            return None
+        data = response.get("data")
+        return {key: data[key] for key in ("file", "file_name", "file_size") if key in data} if isinstance(data, Mapping) else None
 
     def get_message(self, message_id: str) -> Mapping[str, Any] | None:
         """显式回取一条引用消息；不会在普通 action 发送路径中自动触发。"""

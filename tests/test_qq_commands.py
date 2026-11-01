@@ -129,13 +129,13 @@ class CommandStateTests(unittest.TestCase):
         interpreter = QQCommandInterpreter(state)
 
         result = interpreter.execute(
-            "/at reply off 348600105",
+            "/at reply off 100001",
             conversation_id="master",
             conversation_type="private",
         )
 
         self.assertEqual(result.status, "attention_reply_off")
-        self.assertFalse(state.is_autonomous_reply_enabled("348600105"))
+        self.assertFalse(state.is_autonomous_reply_enabled("100001"))
         self.assertTrue(state.is_autonomous_reply_enabled("348600106"))
         self.assertTrue(state.is_autonomous_reply_enabled())
 
@@ -146,7 +146,7 @@ class CommandStateTests(unittest.TestCase):
         )
         self.assertEqual(global_result.status, "attention_reply_off")
         self.assertFalse(state.is_autonomous_reply_enabled())
-        self.assertFalse(state.is_autonomous_reply_enabled("348600105"))
+        self.assertFalse(state.is_autonomous_reply_enabled("100001"))
         self.assertFalse(state.is_autonomous_reply_enabled("348600106"))
 
     def test_onlooker_is_scoped_to_one_group(self) -> None:

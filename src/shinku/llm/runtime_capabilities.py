@@ -205,7 +205,7 @@ class RuntimeCapabilitiesMixin:
 
     def _read_native_tool_call(self, response: Any) -> dict[str, Any] | None:
         if self._is_malformed_native_tool_call(response):
-            return self._malformed_native_payload()
+            return self._malformed_native_payload("provider_malformed_function_call")
         try:
             message = response.choices[0].message
         except Exception:
@@ -218,8 +218,10 @@ class RuntimeCapabilitiesMixin:
             function = self._value_of(raw_call, "function")
             name = str(self._value_of(function, "name") or "").strip()
             arguments = self._decode_tool_args(self._value_of(function, "arguments"))
-            if not name or _CALL_NAME_RE.fullmatch(name) is None or arguments is None:
-                return self._malformed_native_payload()
+            if not name or _CALL_NAME_RE.fullmatch(name) is None:
+                return self._malformed_native_payload("invalid_tool_name")
+            if arguments is None:
+                return self._malformed_native_payload("invalid_argument_json")
             normalized.append(
                 {
                     "name": name,
@@ -274,15 +276,17 @@ class RuntimeCapabilitiesMixin:
         if not parts:
             return None
         if any(row.get("malformed") is True for row in parts.values()):
-            return self._malformed_native_payload()
+            return self._malformed_native_payload("provider_malformed_function_call")
         indexes = sorted(parts)
         normalized: list[dict[str, Any]] = []
         for index in indexes:
             item = parts.get(index) or {}
             name = str(item.get("name") or "").strip()
             arguments = self._decode_tool_args("".join(str(piece) for piece in item.get("arguments_parts", [])))
-            if not name or _CALL_NAME_RE.fullmatch(name) is None or arguments is None:
-                return self._malformed_native_payload()
+            if not name or _CALL_NAME_RE.fullmatch(name) is None:
+                return self._malformed_native_payload("invalid_tool_name")
+            if arguments is None:
+                return self._malformed_native_payload("invalid_argument_json")
             normalized.append(
                 {
                     "name": name,
@@ -307,8 +311,8 @@ class RuntimeCapabilitiesMixin:
         return result
 
     @staticmethod
-    def _malformed_native_payload() -> dict[str, Any]:
-        return {"_malformed": True, "protocol_error": "native_tool_arguments_malformed",
+    def _malformed_native_payload(reason: str = "unknown") -> dict[str, Any]:
+        return {"_malformed": True, "protocol_error": "native_tool_arguments_malformed", "malformed_reason": reason,
                 "tool_calls": [], TOOL_SOURCE_FIELD: NATIVE_OPENAI}
 
     def _decode_tool_args(self, value: Any) -> dict[str, Any] | None:
@@ -343,7 +347,12 @@ class RuntimeCapabilitiesMixin:
             )
             return {}
         logger.debug("thinking_control_applied: mode=%s model=%s", mode, str(getattr(bundle, "model", "") or ""))
-        return {"extra_body": {"thinking": {"type": mode}}}
+        kwargs = {"extra_body": {"thinking": {"type": mode}}}
+        # 档位由宿主按供应商模型元数据校验；默认不发送，保持旧调用兼容。
+        effort = str(self._env('LLM_REASONING_EFFORT', '') or '')
+        if mode == 'enabled' and effort in {'minimal','low','medium','high','xhigh','max'}:
+            kwargs['reasoning_effort'] = effort
+        return kwargs
 
     def _supports_thinking_control(self, bundle: ModelBundle) -> bool:
         if self._protocol_of(bundle) != "openai":

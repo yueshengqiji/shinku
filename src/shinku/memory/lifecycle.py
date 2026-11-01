@@ -8,6 +8,7 @@ summaries. Reclamation requires an explicit scope and independent approval.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import threading
 import time
@@ -110,6 +111,13 @@ class MemoryLifecycle:
     def _eligible(row, record_type: str) -> bool:
         if row is None or row["status"] != "active":
             return False
+        if record_type == "event":
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (ValueError, TypeError):
+                metadata = {}
+            if isinstance(metadata, dict) and metadata.get("experience_schema") == 1:
+                return False  # Historical cards use source validity, not persona reinforcement.
         if record_type == "fact":
             return True
         # Task archives, pre-existing summaries and temporary states have
@@ -119,6 +127,12 @@ class MemoryLifecycle:
     @staticmethod
     def revoked(conn, *, scope: str, source_id: str, text: str) -> bool:
         source_hash = digest(source_id) if source_id else ""
+        # 主人共享副本的遗忘同步约束精确同源原件；不能按相同正文跨用户撤销。
+        # 复用持久化墓碑，另一连接/进程下一次读取即生效，无需等待缓存通知。
+        if source_id.startswith("turn:") and conn.execute(
+            "SELECT 1 FROM memory_revocations WHERE scope='private:master' AND source_hash=? LIMIT 1",
+            (digest("owner:" + source_id),)).fetchone() is not None:
+            return True
         return conn.execute("SELECT 1 FROM memory_revocations WHERE scope=? AND ((source_hash<>'' AND source_hash=?) OR content_hash=?) LIMIT 1", (scope, source_hash, digest(text))).fetchone() is not None
 
     @staticmethod
@@ -423,15 +437,8 @@ class MemoryLifecycle:
                 if state["raw_protected_until"] > now or now - state["enrolled_at"] < self.policy.migration_grace_seconds:
                     skipped["protected_or_grace"] += 1
                     continue
-                if self.policy.defer_l1_embeddings and state["tier"] == 1:
-                    vector_bytes = int(conn.execute("SELECT COALESCE(sum(length(vector_blob)),0) FROM memory_embeddings WHERE record_type=? AND record_id=?", (kind, rid)).fetchone()[0])
-                    if vector_bytes:
-                        applied = self.policy.mode == "active" and allow_reclaim
-                        if applied:
-                            conn.execute("DELETE FROM memory_embeddings WHERE record_type=? AND record_id=?", (kind, rid))
-                            vector_reclaimed += vector_bytes
-                        actions.append({"record_id": f"{kind}:{rid}", "scope": state["scope"], "action": "reclaim_l1_vectors", "reason": "deferred_index_policy_after_migration_grace", "before_tier": state["tier"], "proposed_tier": state["tier"], "applied": applied})
-                        self._audit(conn, state, now, "reclaim_l1_vectors", "deferred_index_policy_after_migration_grace", int(state["tier"]), vector_bytes if applied else 0)
+                # 保留的原文仍需要可检索表示；不再仅因处于 L1 就回收有效向量。
+                # 向量随原文撤销、摘要替代或实际回收而失效，不改变以下冷却/晋级条件。
                 base_threshold = self.policy.l2_seconds if state["tier"] == 2 else self.policy.l1_seconds
                 threshold = base_threshold
                 # Bounded reinforcement gain (not cumulative immortality).

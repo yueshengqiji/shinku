@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import tempfile
 import unittest
@@ -39,6 +40,9 @@ class MultiTurnScriptedRuntime:
 
     def call_chat_json(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         if self.step_responses:
             return self.step_responses.pop(0)
         return {"kind": "final", "text": "完成。"}
@@ -150,14 +154,18 @@ class AgentCrossTurnMemoryTests(unittest.TestCase):
             reply_2 = bridge.handle_turn(turn_2)
             self.assertEqual(reply_2.agent_status, "completed")
 
-            # 验证 Turn 2 模型接收的 prompt 中注入了【上一任务延续上下文】
+            # P3: continue from host facts, never the old model's completion prose.
             # Turn 1 有 2 次调用，Turn 2 只有 1 次调用
             turn_2_call = runtime.calls[2]
             turn_2_prompt = str(turn_2_call["user_prompt"])
             turn_2_system = "\n".join(turn_2_call.get("system_extra_blocks", []))
             self.assertIn("【候选任务，仅在语义相关时承接】", turn_2_prompt)
             self.assertIn("mock_query", turn_2_prompt)
-            self.assertIn("package.json 分析完成", turn_2_prompt)
+            self.assertIn('"goal": "帮我查一下 package.json"', turn_2_prompt)
+            self.assertIn('"source": "task_view"', turn_2_prompt)
+            self.assertIn('"source": "completion_verifier"', turn_2_prompt)
+            self.assertIn('"current_attempt": true', turn_2_prompt)
+            self.assertNotIn("package.json 分析完成", turn_2_prompt)
             self.assertIn("不要靠某个固定词判断", turn_2_system)
             self.assertIn("闲聊或新目标不要强行续接", turn_2_system)
 

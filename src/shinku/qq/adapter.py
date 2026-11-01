@@ -150,6 +150,11 @@ class QQIngressAdapter:
                 now=float(at),
                 include_context=attention.should_schedule,
             )
+            group_snapshot = message.raw_event.get("_shinku_group_context", {})
+            if isinstance(group_snapshot.get("current"), dict):
+                group_snapshot["current"]["bot_exchange_confirmed"] = bool(
+                    route.addressed or signals.reply_to_delivered_message
+                    or signals.recent_directed_turn or signals.recent_bot_exchange)
             closed_batch = self.batcher.push(message, attention, at=at)
             self._record_attention_trace(
                 message,
@@ -180,6 +185,11 @@ class QQIngressAdapter:
                 conversation_id, recipient_ids=recipient_ids, message_ids=message_ids,
                 autonomous=autonomous, now=float(at),
             )
+
+    def note_group_continuation(self, group_id: str, recipient_id: str, at: float) -> None:
+        """与入站共用锁；调用方必须先核验承接凭据及完整送达，不更改受话/任务归属。"""
+        with self._ingress_lock:
+            self.autonomous_tracker.note_continuation(group_id, recipient_id, now=float(at))
 
     def _record_attention_trace(
         self,

@@ -1,4 +1,5 @@
 """A notice addressed elsewhere must not re-enter via autonomous attention."""
+from reply_review_fixture import dialogue_review_result
 import pytest
 
 from shinku.qq.adapter import QQIngressAdapter
@@ -9,17 +10,17 @@ from shinku.qq.routing import ReplyRoutePolicy
 from shinku.qq.turns import QQTurn
 
 
-BOT = "3599477026"
-OTHER = "3034389702"
+BOT = "100005"
+OTHER = "100004"
 
 
 def event(target=OTHER, *, shape="group_poke", group=True):
     value = {"post_type": "notice", "notice_type": shape, "self_id": BOT,
-             "operator_id": "2406043", "user_id": "2406043", "time": 100}
+             "operator_id": "100003", "user_id": "100003", "time": 100}
     if shape == "notify":
         value["sub_type"] = "poke"
     if group:
-        value["group_id"] = "872732158"
+        value["group_id"] = "100002"
     if target is not None:
         value["target_id"] = target
     return value
@@ -63,6 +64,9 @@ class Runtime:
         self.calls = []
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return {"kind": "final", "text": "看到了。", "task_outcome": "completed"}
 
 
@@ -124,8 +128,8 @@ def test_conflicting_target_aliases_do_not_guess_that_bot_was_poked():
 
 def test_ignored_poke_does_not_pollute_or_flush_a_pending_real_message():
     subject = adapter()
-    message = {"post_type": "message", "message_type": "group", "group_id": "872732158",
-        "self_id": BOT, "user_id": "2406043", "message_id": "real-message",
+    message = {"post_type": "message", "message_type": "group", "group_id": "100002",
+        "self_id": BOT, "user_id": "100003", "message_id": "real-message",
         "message": [{"type": "text", "data": {"text": "真红你在吗"}}]}
     assert subject.ingest(message, at=100).scheduled
     ignored = subject.ingest(event(), at=100.1)

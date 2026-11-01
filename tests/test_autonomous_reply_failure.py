@@ -99,7 +99,9 @@ def test_explicit_turns_keep_failure_feedback(item):
     '{"speech":"今天还不错。",',
 ])
 def test_real_model_text_including_honest_failure_is_not_blanket_suppressed(content):
-    runtime, sent = _make_runtime(scripts=[("response", FakeResponse(content))]), []
+    runtime, sent = _make_runtime(scripts=[("response", FakeResponse(content)),
+        ("response", FakeResponse(json.dumps({"verdict": "allow", "relation": "join", "task_claim": "none", "task_id": ""})))],
+        dialogue_reviews=True), []
     try:
         result = bot(runtime, sent).handle_turn(turn())
         assert result.sent and sent and result.delivery_status == "sent", result.reason
@@ -184,7 +186,8 @@ def test_budget_denial_before_sdk_is_quiet_only_for_autonomous_group(kind):
 @pytest.mark.parametrize("status", ["failed", "blocked"])
 def test_recovered_partial_model_report_preserves_its_explicit_status(status):
     content = '{"speech":"这次没有完成。","task_outcome":"' + status + '",'
-    runtime, sent = _make_runtime(scripts=[("response", FakeResponse(content))]), []
+    runtime, sent = _make_runtime(scripts=[("response", FakeResponse(content)),
+        ("response", FakeResponse(json.dumps({"verdict": "allow", "relation": "join", "task_claim": "none"})))]), []
     try:
         result = bot(runtime, sent).handle_turn(turn())
         assert result.sent and result.final_text == "这次没有完成。"
@@ -195,7 +198,9 @@ def test_recovered_partial_model_report_preserves_its_explicit_status(status):
 
 def test_recovered_partial_status_does_not_bypass_tool_evidence_verification():
     runtime = _make_runtime(scripts=[("response", FakeResponse(
-        '{"speech":"部分完成了。","task_outcome":"partial",'))])
+        '{"speech":"部分完成了。","task_outcome":"partial",')),
+        ("response", FakeResponse(json.dumps({"verdict": "allow", "relation": "join", "task_claim": "none"})))],
+        dialogue_reviews=True)
     sent = []
     try:
         result = bot(runtime, sent).handle_turn(turn())

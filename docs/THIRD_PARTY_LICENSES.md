@@ -17,6 +17,7 @@
 | httpx | 0.28.1 | BSD-3-Clause | 开发测试 HTTP 客户端 |
 | pypdf | 6.10.0 | BSD-3-Clause | 可选 documents 依赖；文字 PDF 提取与成品重开核验 |
 | reportlab | 4.4.9 | BSD-3-Clause | 可选 documents 依赖；中文文字译本 PDF 重排生成 |
+| mcp | 1.30.0 | MIT | 可选 mcp 依赖；显式 stdio 宿主的官方协议客户端，2026-10-23核对发行包许可证 |
 
 审计依据为本机 clean environment 中各发行包的 `*.dist-info/licenses/` 文件和
 元数据；本项目不复制这些依赖的源码。发布时应把相应许可证文本随依赖分发方式

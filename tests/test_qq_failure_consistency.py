@@ -3,7 +3,6 @@ from shinku.agent.loop import AgentDecision
 from shinku.qq.trace import TurnTraceStore
 from shinku.tasks.coordinator import AgentTaskCoordinator
 from test_agent_contract_repair import DeleteRecorder, Runtime, bot, tool_decision, turn, contract
-from test_agent_async_processor import wait_for
 
 
 def test_validation_path_identifies_actual_field_not_private_value(tmp_path):
@@ -17,7 +16,7 @@ def test_validation_path_identifies_actual_field_not_private_value(tmp_path):
         assert error.field_path == "requirements[0].checks.min_sources"
 
 
-def test_synchronous_and_background_preparation_failure_share_status_and_feedback(tmp_path):
+def test_sync_and_async_pre_admission_failure_share_status_and_feedback(tmp_path):
     results = []
     for asynchronous in (False, True):
         recorder = DeleteRecorder()
@@ -31,12 +30,10 @@ def test_synchronous_and_background_preparation_failure_share_status_and_feedbac
         bridge.async_agent_enabled = asynchronous
         try:
             result = bridge.handle_turn(turn())
-            if asynchronous:
-                record = wait_for(coordinator, result.background_task_id, "failed")
-                results.append((record["status"], record["result_summary"], record["error"]))
-            else:
-                results.append((result.agent_status, result.final_text, result.reason))
+            results.append((result.agent_status, result.final_text, result.reason))
             assert recorder.calls == []
+            if asynchronous:
+                assert coordinator.list() == []
             path = bridge.trace_store.path
             restored = TurnTraceStore(path=path).snapshot()[0]
             failure = next(stage for stage in restored["stages"] if stage.get("status") == "validation_failed")

@@ -47,10 +47,28 @@ def test_unresolved_conflict_or_action_in_correction_never_invents_success(corre
 ])
 def test_unbound_off_topic_or_failed_semantic_review_is_not_delivered_as_fact(review):
     runtime, host, _, _ = pipeline(answer="上海晴，30°C。来源：https://weather.example/source")
-    runtime.answer_reviews = [review]
+    # A protocol correction gets the same failing fixture, never the fake
+    # runtime's default semantic approval after its response list is empty.
+    invalid_protocol = not isinstance(review.get("verdict"), str)
+    runtime.answer_reviews = [review, review] if invalid_protocol else [review]
     reply = host.handle_turn(turn())
     assert reply.agent_status == "partial" and "上海晴" not in reply.final_text
-    assert "证据核对" in reply.final_text and len(runtime.calls) == 4
+    assert "证据核对" in reply.final_text and len(runtime.calls) == (5 if invalid_protocol else 4)
+    if invalid_protocol:
+        first, second = runtime.calls[2:4]
+        assert first["user_prompt"] == second["user_prompt"]
+        assert all(row["native_tools"] is None for row in (first, second))
+        assert "仅纠正复核协议" in "\n".join(second["system_extra_blocks"])
+
+
+def test_protocol_correction_then_semantic_rejection_keeps_off_topic_answer_unverified():
+    runtime, host, _, reader = pipeline(answer="上海晴，30°C。来源：https://weather.example/source")
+    runtime.answer_reviews = [{}, {"verdict": "unsupported", "claims": []}]
+    reply = host.handle_turn(turn())
+    assert reply.agent_status == "partial" and "上海晴" not in reply.final_text
+    assert "证据核对" in reply.final_text and len(runtime.calls) == 5 and len(reader.calls) == 1
+    assert all(row["native_tools"] is None for row in runtime.calls[2:])
+    assert runtime.calls[2]["user_prompt"] == runtime.calls[3]["user_prompt"]
 
 
 def test_missing_field_cannot_count_as_complete_even_with_a_successful_body():

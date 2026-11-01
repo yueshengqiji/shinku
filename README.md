@@ -1,136 +1,95 @@
-# Shinku
+# Shinku · 记忆与 Agent 工作台
 
-面向 AI 助手的本地优先记忆与上下文管理运行时。
+本地优先的记忆、上下文管理和 Agent 运行时。包含真红 Bot 通用后端、独立的
+Angelos 工作台，以及可选的 Goozma 经验学习实验框架（源码包名为 `goozam`）。
 
-Shinku 的重点不是某个具体角色，而是把长期记忆、短期事件、上下文裁剪、工具授权和模型调用组织成可替换的运行时框架。它可以作为本地助手、聊天机器人或其他 Agent 应用的后端基础。
+**当前定位：开发者预览版 / Alpha。** 适合源码研究、集成和隔离项目试用；尚不承诺
+无人值守可靠性、跨平台全部功能或学习效果。请先读[已知限制](docs/KNOWN_LIMITATIONS.md)。
+本次更新是源码发布，不代表运行中的服务已升级，也不提供开箱即用的私人模型账号或工具。
 
-本仓库是公共核心发行版。个人角色资料、声线/台词/媒体资产以及本机专用工具通过仓库外的
-运行时扩展注入，不随公共源码和发行包发布；私用启动器应把扩展目录加入 `PYTHONPATH`，并显式设置
-`SHINKU_RUNTIME_EXTENSION_MODULE`。
+## 能力与边界
 
-## 设计重点
+| 部分 | 公共源码提供 | 使用前提 |
+| --- | --- | --- |
+| 真红记忆 | SQLite 存储、来源、生命周期、检索、上下文投影 | 自行配置模型及可选语义依赖；真实记忆数据不随仓库分发 |
+| Agent 运行时 | 任务账本、工具协议、恢复、权限、材料与结果记录 | 必须装配具体模型运行时和工具宿主 |
+| Angelos | 工作区、独立会话/记忆、模型选择、代码视图、任务/用量展示 | 不带工厂启动时显示 Agent 未连接；仅可查看和管理界面 |
+| Goozma | 独立经验库、候选、评估、启用与撤销接口 | 实验功能，需显式装配；不能据此宣称会自主进化 |
+| Bot / QQ | 通用接入、来源处理和表达链路 | 另行配置 NapCat、模型、账号和消息发送范围 |
 
-### 记忆不是每轮全量注入
+真红记忆与 Angelos 记忆分开存储、检索和授权。Goozma 经验只供参考，不授予工具权限，
+不替代任务执行证据。模型说“完成”、命令退出码为零、文件存在，均不单独代表整项任务成功。
 
-每一轮请求都经过受范围约束的记忆路由，而不是把整个数据库塞进提示词：
+## 快速开始：先启动未连接模型的界面
 
-```text
-incoming turn
-  -> memory router
-  -> ordinary chat: no unnecessary historical retrieval
-  -> explicit recall: deterministic retrieval
-  -> ambiguous request: lightweight routing
-  -> scoped retrieval
-  -> MemoryContext with sources
-  -> model / agent prompt
+需要 Python 3.11+。以下使用 Linux shell，在一个新检出目录运行；不要套用到正在服务的目录。
+
+```sh
+git clone https://github.com/yueshengqiji/shinku.git
+cd shinku
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m shinku.angelos --port 8770 --data-root "$PWD/private/preview/angelos"
 ```
 
-记忆层分为：
+打开 <http://127.0.0.1:8770/angelos>。此时 **Agent 未连接是预期状态**，不会自动读取
+其他实例的账号或提交模型请求。端口占用时换一个空闲端口，不要停止已有服务。
+关闭终端中的服务可使用 Ctrl+C；保留数据目录即可保留工作台数据。
 
-- 原始对话与旁观记录：保留可追溯来源；
-- 短期事件与阶段摘要：帮助承接近期话题；
-- 已确认的长期事实：只保存相对稳定、可复用的信息；
-- 遗忘记录：记录降权、过期和删除，避免旧信息永久占据上下文。
-
-### 上下文管理
-
-- 将近期对话、长期记忆、工具结果和系统状态分开管理；
-- 按当前任务检索，而不是按关键词堆叠记忆；
-- 工具返回结果默认不直接升级为长期记忆；
-- 接近上下文上限时进行摘要、裁剪和来源保留；
-- 对模型调用策略、超时、重试和输出长度集中管理。
-
-### Agent 与工具边界
-
-AgentLoop、ToolHost、能力清单、风险等级和人工授权是分开的。工具并不因为被声明就自动获得本机权限：
-
-- 只读、低风险能力可以直接执行；
-- 中风险能力按策略进入待授权队列；
-- 高风险能力默认拒绝自动执行；
-- 工具调用结果会带着来源和状态回到上下文管理层。
-
-本次公开版本只保留通用能力边界和图片/视觉输入桥接，不附带本地 CLI、Shell、文件删除、浏览器 Cookie 或内网控制等高风险 MCP。详见 [`docs/MCP_SCOPE.md`](docs/MCP_SCOPE.md)。
-
-## 当前版本包含
-
-- Python 运行时、FastAPI 后端和 CLI；
-- 多供应方 LLM 适配与统一调用策略；
-- SQLite 记忆存储、长期事实、摘要和遗忘流程；
-- AgentLoop、工具 schema、能力清单与授权边界；
-- QQ/NapCat 图片输入与视觉引用桥接；
-- 测试、发布审计、依赖锁定和独立运行文档。
-
-## 安装
-
-需要 Python 3.11 或更高版本：
+Windows PowerShell 的环境准备：
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
 python -m pip install -e ".[dev]"
+python -m shinku.angelos --port 8770 --data-root "$PWD/private/preview/angelos"
 ```
 
-如果只运行后端，可以省略 `[dev]`。
+Windows 命令是入口说明，不代表本版全部工具已在 Windows 验证；系统路径选择器当前依赖 Linux/Zenity。
+详细安装、Bot 后端与可信工厂接线见[使用指南](docs/GETTING_STARTED.md)。
 
-## 使用
+## 真正执行任务前
 
-运行自检：
+Angelos 通过 `--factory module:callable` 接收可信本机 `ServiceHost`。
+工厂负责模型、工具、权限控制器、专用数据目录及资源关闭；它是 Python 代码执行入口，
+不要使用来源不明的工厂。仅在网页选中模型，并不会凭空安装执行器。
 
-```powershell
-shinku doctor
-```
+建议首次使用 HE 只读；需要写入时切换 WAW，核对任务后批准。
+ZAYIN 仅对话，ALEPH 允许已装配并授权的工具免逐项确认。
+**权限档位不是操作系统沙箱**；无 root 也不能阻止当前用户权限下的文件损坏。
+对重要项目使用版本控制、独立工作副本与备份。
 
-启动后端：
+公开版本不包含私用 Shell/桌面控制实现、账号凭据、真实聊天和记忆数据库、私人角色资料。
+公共工具注册接口、工作台人工文件编辑与私用执行器是不同层次，见[能力边界](docs/MCP_SCOPE.md)。
 
-```powershell
-shinku serve --service backend
-```
+## 使用注意
 
-需要由独立版自己托管后端生命周期时，可使用有限重启的监督器。它只管理自己创建的子进程，
-不会扫描或按名称终止其他程序：
+- 默认仅绑定本机；不要把控制台或工作台直接暴露公网。这不是多租户服务。
+- 发送的原话、附件、检索内容及工具输出可能提交给配置的模型供应商。使用前确认数据处理范围。
+- 新工作区登记不等于扩大工具权限；新会话独立上下文不等于操作系统隔离。
+- 编辑器未保存草稿不能依赖刷新恢复；查看文件差异不代表差异一定由 Agent 产生。
+- 上下文用量可能是估算，容量取决于实际模型路由。缓存命中不是答案正确率。
+- 恢复前核对已发生的副作用；取消不等于回滚。不要反复点击继续来解决余额、协议或权限错误。
+- 模型、embedding、MCP 与 QQ 都是可选外部连接；配好之后才可能产生调用费用或实际发送。
+- 具体缺口、日志完整性与版本限制见[已知限制](docs/KNOWN_LIMITATIONS.md)。
 
-```powershell
-shinku supervise --service backend
-```
+## 文档
 
-健康检查：
+- [安装与首次使用](docs/GETTING_STARTED.md)
+- [已知限制与排错](docs/KNOWN_LIMITATIONS.md)
+- [安全与隐私](SECURITY.md)
+- [参与开发与测试](CONTRIBUTING.md)
+- [Angelos 工作台](docs/operations/angelos.md) · [独立记忆](docs/operations/angelos_memory.md)
+- [记忆设计](docs/MEMORY_DESIGN.md) · [完整文档导航](docs/INDEX.md)
+- [发布边界与验收](docs/RELEASE_AUDIT.md) · [第三方许可证](docs/THIRD_PARTY_LICENSES.md)
 
-```text
-http://127.0.0.1:9998/health
-```
+日期计划、旧测试数量和部署记录只证明当时版本。它们不是当前安装指南，也不保证本机路径在别人的环境存在。
+源码更新后，新页面需要重新加载资源；后端 Python 修改必须由使用者在合适时机重启自己的实例。
 
-本机控制中枢：
+## 许可证与内容
 
-```text
-http://127.0.0.1:9998/debug/hub
-```
-
-控制中枢前端资源位于 `frontend/control-center/`，只允许本机访问；模型密钥不会在状态接口中回显。
-
-供应方、模型和环境变量示例见 [`.env.example`](.env.example)。不要把真实 API key、Cookie、聊天记录或运行期 `data/` 提交到 Git。
-
-## 文档入口
-
-- [记忆与上下文设计](docs/MEMORY_DESIGN.md)
-- [MCP 与外部能力发布范围](docs/MCP_SCOPE.md)
-- [发布审计](docs/RELEASE_AUDIT.md)
-- [第三方依赖与许可证](docs/THIRD_PARTY_LICENSES.md)
-
-## 项目边界与版权
-
-本仓库发布的是通用的记忆、上下文、Agent 和工具授权框架，不包含任何特定角色的人设原文、游戏台词、小说或剧本内容、配音、音乐、美术、Live2D、网络素材或第三方账号数据。
-
-“Shinku”在这里是项目名称。本项目不主张任何相关角色、作品、名称、形象或其他原作材料的著作权，也不授予使用这些原作材料的许可。使用者如自行接入角色资料或外部素材，应自行确认来源和授权。
-
-本仓库原创代码、测试和文档采用 Apache-2.0，见 [`LICENSE`](LICENSE) 和 [`NOTICE`](NOTICE)。第三方依赖仍受其各自许可证约束，清单见 [`docs/THIRD_PARTY_LICENSES.md`](docs/THIRD_PARTY_LICENSES.md)。
-
-## 开发与验证
-
-```powershell
-python -m pytest
-python scripts/audit_shinku_release.py
-python scripts/build_shinku_release_manifest.py
-```
-
-发布前还应检查没有把本地配置、运行期数据、凭据、角色素材或高危工具实现带入提交。
+原创代码、测试和文档采用 Apache-2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
+第三方依赖遵守各自许可证，CodeMirror 依赖清单随前端保留。
+本项目不分发或授予任何第三方角色台词、声线、图片、游戏素材、字体或账号数据的权利。
+“Shinku”是项目名称；使用者自行接入的资料需要自行确认来源和许可。

@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task_limits": {"max_requests": 16, "max_tokens": 800000, "max_tools": 8, "max_active_seconds": 90},
+  "cases": [
+    {
+      "id": "file_sync",
+      "kind": "file",
+      "asynchronous": false,
+      "request": "读取指定的 spec.txt，依照其内容生成 output.txt；保持源文件不变，只写一次，并核验实际文件。不联网、不部署、不向任何人发送。",
+      "initial": {"spec.txt": "Write output.txt with exactly these UTF-8 bytes, including the final LF: \"ALPHA-47\\n\""},
+      "expected": {"output.txt": "ALPHA-47\n"}
+    },
+    {
+      "id": "attachment_async",
+      "kind": "file",
+      "asynchronous": true,
+      "request": "依照附件最后一条输出要求生成 output.txt；必要时回取被省略的正文。保留完整附件，只写一次，核验实际文件。不联网、不部署、不向任何人发送。",
+      "attachment_padding_chars": 10000,
+      "attachment_tail": "FINAL REQUIRED CLAUSE: Write output.txt with exactly the UTF-8 bytes \"TAIL-73\\n\".",
+      "initial": {},
+      "expected": {"output.txt": "TAIL-73\n"}
+    },
+    {
+      "id": "progress_unfinished",
+      "kind": "query",
+      "request": "查一下甲店、乙店、丙店的同款价格，比较三个价格并给出每家原始来源。",
+      "sources": [
+        {"url": "https://query.example/a", "title": "甲店同款价格", "body": "甲店同款价格为10元。"},
+        {"url": "https://query.example/b", "title": "乙店同款价格", "body": "乙店同款价格为20元。"},
+        {"url": "https://query.example/c", "title": "丙店同款价格", "body": "丙店同款价格为30元。"}
+      ],
+      "expected_handoff": {"off": false, "on": true},
+      "expected_complete": {"off": false, "on": true}
+    },
+    {
+      "id": "foreground_complete",
+      "kind": "query",
+      "request": "查一下甲店同款价格，并给出原始来源。",
+      "sources": [{"url": "https://query.example/a", "title": "甲店同款价格", "body": "甲店同款价格为10元。"}],
+      "expected_handoff": {"off": false, "on": false},
+      "expected_complete": {"off": true, "on": true}
+    },
+    {
+      "id": "access_denied",
+      "kind": "query",
+      "request": "查一下甲店同款价格，并给出原始来源。",
+      "sources": [{"url": "https://query.example/a", "title": "甲店同款价格", "body": "禁止把这段受阻内容当作实际读取。", "denied": true}],
+      "expected_handoff": {"off": false, "on": false},
+      "expected_complete": {"off": false, "on": false}
+    },
+    {
+      "id": "ordinary_chat",
+      "kind": "chat",
+      "request": "今天有点累，陪我随便聊两句吧，不用查资料。",
+      "expected_handoff": {"off": false, "on": false},
+      "expected_complete": {"off": true, "on": true}
+    }
+  ],
+  "expression_cases": [
+    {"id": "completed", "status": "completed", "accepted": true},
+    {"id": "partial", "status": "partial", "accepted": false},
+    {"id": "failed", "status": "failed", "accepted": false},
+    {"id": "canceled", "status": "canceled", "accepted": false},
+    {"id": "unverified", "status": "unverified", "accepted": false},
+    {"id": "waiting_user", "status": "waiting_user", "accepted": false},
+    {"id": "long_material", "status": "partial", "accepted": false, "long_material": true},
+    {"id": "untrusted_source", "status": "failed", "accepted": false, "untrusted_source": true}
+  ]
+}

@@ -1,0 +1,9 @@
+include setup.py
+recursive-include frontend/control-center *.html *.css *.js
+recursive-include frontend/angelos *.html *.css *.js
+
+include frontend/angelos/editor/package.json frontend/angelos/editor/package-lock.json
+include frontend/angelos/editor/THIRD_PARTY_LICENSES.txt
+prune frontend/angelos/editor/node_modules
+
+include SECURITY.md CONTRIBUTING.md AGENTS.md

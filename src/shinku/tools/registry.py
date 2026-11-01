@@ -38,6 +38,18 @@ class ToolRegistry:
     def get(self, name: str) -> ToolHandler | None:
         return self._handlers.get(str(name or "").strip())
 
+    def unregister(self, name: str, *, expected: ToolHandler) -> bool:
+        """只撤回调用方原来注册的对象，保留其他宿主后来替换的 handler。
+
+        插件停用在装配/退出边界调用；在途 AgentLoop 持有的旧 handler 由插件
+        生命周期包装器另行封住，不把删除目录误当作停止已发生的执行。
+        """
+        key = str(name or "").strip()
+        if self._handlers.get(key) is not expected:
+            return False
+        del self._handlers[key]
+        return True
+
     def view(self) -> Mapping[str, ToolHandler]:
         return MappingProxyType(self._handlers)
 

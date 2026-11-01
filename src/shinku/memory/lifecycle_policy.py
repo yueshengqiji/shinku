@@ -37,6 +37,8 @@ class LifecyclePolicy:
     audit_limit: int = 2000
     evidence_retention_seconds: int = 60 * 86400
     auto_raw_budget_bytes: int = 64 * 1024 * 1024
+    # True 将 L1 持久向量生成延后到原有后台索引器；前台仅临时编码有界缺口。
+    # 已建立的派生向量跟随原文有效期，不影响等级、强化或原文回收授权。
     defer_l1_embeddings: bool = False
     # Additional source excerpts may reach the already configured AUX service.
     # Opt-in independently of retention/reclamation; no new model is selected.

@@ -8,6 +8,7 @@ from dataclasses import replace
 import hashlib
 import json
 from typing import Any
+from . import retrieval_trace
 
 def fingerprint(record: Any, conversation_id: str) -> str:
     value = [record.record_id, record.scope, record.source_id, record.layer, record.text,
@@ -20,52 +21,79 @@ class MemorySourceReader:
     def __init__(self, store: Any):
         self.store = store
 
-    def _snapshot(self, conn: Any, record_id: str, scope: str, *, _path=(), _budget=None):
+    @staticmethod
+    def _reject(rejections, reason):
+        """可选的请求内原因收集；不保存正文、记录 ID 或全局最后状态。"""
+        if rejections is not None and len(rejections) < 16:
+            rejections.append(reason)
+        return None
+
+    def _snapshot(self, conn: Any, record_id: str, scope: str, *, _path=(), _budget=None,
+                  _now=None, _rejections=None):
         budget = [128] if _budget is None else _budget
         if record_id in _path or len(_path) >= 8 or budget[0] <= 0:
-            return None
+            return self._reject(_rejections, "source_dependency_budget")
         budget[0] -= 1
         try:
             kind, bare = self.store.lifecycle._identity(record_id)
         except ValueError:
-            return None
+            return self._reject(_rejections, "invalid_source_handle")
         row = self.store.lifecycle._record(conn, kind, bare)
-        if row is None or row["status"] != "active" or row["scope"] != scope:
-            return None
+        if row is None:
+            return self._reject(_rejections, "source_missing")
+        if row["scope"] != scope:
+            return self._reject(_rejections, "scope_not_allowed")
+        if row["status"] != "active":
+            reason = {"forgotten": "source_revoked", "expired": "source_expired"}.get(
+                row["status"], "source_inactive")
+            return self._reject(_rejections, reason)
+        if _now is not None and row["expires_at"] and row["expires_at"] <= _now:
+            managed = (kind == "event" and self.store.lifecycle.policy.mode == "active"
+                       and conn.execute("SELECT 1 FROM memory_lifecycle WHERE record_type='event' AND record_id=?", (bare,)).fetchone())
+            if not managed:
+                return self._reject(_rejections, "source_expired")
         if str(row["source_id"]).startswith("owner:agent-task-detail:"):
-            return None
+            return self._reject(_rejections, "source_not_readable")
         if self.store.lifecycle.revoked(conn, scope=scope, source_id=row["source_id"], text=row["text"]):
-            return None
+            return self._reject(_rejections, "source_revoked")
         record = (self.store._event_record(row, score=0.0) if kind == "event"
                   else self.store._fact_record(row, score=0.0))
+        if record.metadata.get("experience_schema") == 1:
+            projector = getattr(self.store, "task_experience", None)
+            if projector is None or not projector.validate_record(record):
+                return self._reject(_rejections, "source_dependency_invalid")
         parents = record.metadata.get("source_record_ids", [])
         hashes = record.metadata.get("source_content_hashes", {})
         if not isinstance(parents, list) or len(parents) > 128 or not isinstance(hashes, dict):
-            return None
+            return self._reject(_rejections, "source_dependency_invalid")
         for parent_id in parents:
             if not isinstance(parent_id, str) or not hashes.get(parent_id):
+                return self._reject(_rejections, "source_dependency_invalid")
+            parent = self._snapshot(conn, parent_id, scope, _path=(*_path, record_id), _budget=budget,
+                                    _now=_now, _rejections=_rejections)
+            if parent is None:
                 return None
-            parent = self._snapshot(conn, parent_id, scope, _path=(*_path, record_id), _budget=budget)
-            if parent is None or hashlib.sha256(parent[0].text.encode("utf-8")).hexdigest() != hashes[parent_id]:
-                return None
-        if kind == "fact" and record.metadata.get("owner_origin_record_id"):
-            # Owner copies made by the opt-in current-view writer depend on
-            # their origin version. Integrity checks return no foreign content.
-            # A correction/revocation of the origin makes the copy unavailable,
-            # even if cache invalidation or a second scope update has not run.
+            if hashlib.sha256(parent[0].text.encode("utf-8")).hexdigest() != hashes[parent_id]:
+                return self._reject(_rejections, "source_dependency_changed")
+        if (kind == "fact" or record.metadata.get("owner_participant_id")) and record.metadata.get("owner_origin_record_id"):
+            # 当前理解的事实副本与参与者经历副本都依赖原件版本。
+            # 原件修改或撤销即失效；这里只核验，不返回外部作用域的正文。
             meta = record.metadata
             try:
                 origin_kind, origin_id = self.store.lifecycle._identity(meta["owner_origin_record_id"])
             except (ValueError, KeyError):
-                return None
+                return self._reject(_rejections, "owner_origin_unavailable")
             origin = self.store.lifecycle._record(conn, origin_kind, origin_id)
-            if origin_kind != "fact" or origin is None or origin["status"] != "active" or origin["scope"] != meta.get("owner_origin_scope"):
-                return None
+            if origin_kind != kind or origin is None or origin["status"] != "active" or origin["scope"] != meta.get("owner_origin_scope"):
+                return self._reject(_rejections, "owner_origin_unavailable")
+            if _now is not None and origin["expires_at"] and origin["expires_at"] <= _now:
+                return self._reject(_rejections, "source_expired")
             if self.store.lifecycle.revoked(conn, scope=origin["scope"], source_id=origin["source_id"], text=origin["text"]):
-                return None
-            origin_record = self.store._fact_record(origin, score=0.0)
+                return self._reject(_rejections, "source_revoked")
+            origin_record = (self.store._fact_record(origin, score=0.0) if kind == "fact"
+                             else self.store._event_record(origin, score=0.0))
             if fingerprint(origin_record, str(origin["conversation_id"])) != meta.get("owner_origin_version"):
-                return None
+                return self._reject(_rejections, "owner_origin_changed")
         return record, fingerprint(record, str(row["conversation_id"])), str(row["conversation_id"])
 
     def read_source(self, *, record_id: str, scope: str, now: int,
@@ -87,9 +115,13 @@ class MemorySourceReader:
         with self.store._lock, self.store._connect() as conn:
             conn.execute("BEGIN")
             snapshots = [self._snapshot(conn, record_id, scope) for record_id, scope, _ in requests]
-        return tuple(self._reading_source(snapshot) if snapshot is not None
+        result = tuple(self._reading_source(snapshot) if snapshot is not None
                      and (not expected_hash or snapshot[1] == expected_hash) else None
                      for snapshot, (_, _, expected_hash) in zip(snapshots, requests))
+        if retrieval_trace.enabled():
+            retrieval_trace.observe("source.validated", tuple(row for row in result if row is not None),
+                                    requested=len(requests), rejected=sum(row is None for row in result))
+        return result
 
     @staticmethod
     def _reading_source(snapshot):
@@ -110,9 +142,11 @@ class MemorySourceReader:
             record.metadata.get("source_version", "")) for record in records), now=now)
         for record, fresh in zip(records, fresh_sources):
             if fresh is not None:
+                # query_bridge 只是本次查询的展示依赖，渲染端继续核对桥接版本；
+                # 不落入来源正文或持久事实，也不能授予新的读取范围。
                 primary.append(replace(fresh, score=record.score,
                     metadata={**fresh.metadata, **{key: value for key, value in record.metadata.items()
-                              if key in {"search_hints", "search_generator", "retrieval_method", "semantic_similarity", "lexical_score", "current_understanding", "evidence_selection"}}}))
+                              if key in {"search_hints", "search_generator", "retrieval_method", "semantic_similarity", "lexical_score", "current_understanding", "evidence_selection", "query_bridge"}}}))
         selected = {record.record_id: record for record in primary[:limit]}
         for record in primary:
             if len(selected) >= limit:

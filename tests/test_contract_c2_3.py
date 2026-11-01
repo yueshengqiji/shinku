@@ -293,10 +293,10 @@ class BuildSettingsTests(unittest.TestCase):
                                        require_model=False)
                 self.assertEqual(settings.provider_id, "glm")
 
-    def test_an_unknown_provider_falls_back_to_the_default_id(self) -> None:
+    def test_an_unknown_provider_keeps_its_explicit_id(self) -> None:
         settings = self._build({"providerId": "nope", "baseUrl": "https://x.test/v1",
                                 "apiKey": "k", "chatModel": "m"})
-        self.assertEqual(settings.provider_id, "openai_compatible")
+        self.assertEqual(settings.provider_id, "nope")
 
     def test_the_default_model_is_applied_when_none_is_given(self) -> None:
         settings = self._build({"providerId": "glm", "apiKey": "k"})
@@ -1127,7 +1127,7 @@ class CatalogSnapshotTests(unittest.TestCase):
             api_key="k", chat_model="deepseek-chat"))
         with mock.patch.object(catalog_module, "PROVIDER_PRESETS", PROVIDER_PRESETS[:1]):
             page = public_model_services_snapshot(self.store, self.config)
-        extra = [entry for entry in page["providers"] if entry["id"] == "openai_compatible"]
+        extra = [entry for entry in page["providers"] if entry["id"] == "deepseek"]
         self.assertEqual(len(extra), 1)
         self.assertEqual(extra[0]["description"], "已保存的自定义 OpenAI 兼容服务。")
 

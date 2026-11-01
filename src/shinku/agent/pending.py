@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -131,18 +133,22 @@ class JsonPendingApprovalStore:
         if not key:
             return
         with self._lock:
-            self._records.setdefault(key, []).append(record)
-            self._flush()
+            records = {name: list(values) for name, values in self._records.items()}
+            records.setdefault(key, []).append(record)
+            self._flush(records)
+            self._records = records
 
     def delete(self, conversation_id: str) -> None:
         key = str(conversation_id or "").strip()
         with self._lock:
-            records = self._records.get(key, [])
-            if records:
-                records.pop(0)
-            if not records:
-                self._records.pop(key, None)
-            self._flush()
+            records = {name: list(values) for name, values in self._records.items()}
+            values = records.get(key, [])
+            if values:
+                values.pop(0)
+            if not values:
+                records.pop(key, None)
+            self._flush(records)
+            self._records = records
 
     def _load(self) -> None:
         try:
@@ -162,15 +168,31 @@ class JsonPendingApprovalStore:
             if records:
                 self._records[str(conversation_id)] = records
 
-    def _flush(self) -> None:
+    def _flush(self, records) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            key: [self._record_to_dict(record) for record in records]
-            for key, records in self._records.items()
+            key: [self._record_to_dict(record) for record in values]
+            for key, values in records.items()
         }
-        temporary = self.path.with_name(self.path.name + ".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temporary, self.path)
+        fd, name = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            for attempt in range(6):
+                try:
+                    os.replace(temporary, self.path)
+                    break
+                except PermissionError as exc:
+                    # Windows readers/security scanners may briefly deny
+                    # replacement. Permanent or unrelated failures propagate.
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                        raise
+                    time.sleep(.01 * 2 ** attempt)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def _record_to_dict(record: PendingApprovalRecord) -> dict[str, Any]:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import tempfile
 import unittest
@@ -22,6 +23,9 @@ class _Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return {"kind": "final", "text": self.text}
 
 
@@ -64,12 +68,12 @@ class IndependentGrayJointTests(unittest.TestCase):
         event = {
             "post_type": "message",
             "message_type": "group",
-            "self_id": 3599477026,
+            "self_id": 100005,
             "group_id": "g-joint",
             "user_id": "u-joint",
             "message_id": "joint-1",
             "message": [
-                {"type": "at", "data": {"qq": "3599477026"}},
+                {"type": "at", "data": {"qq": "100005"}},
                 {"type": "text", "data": {"text": "请确认联合回归"}},
             ],
         }

@@ -1,0 +1,247 @@
+{
+  "version": "ranking-fresh-v1",
+  "source_kind": "fictional_only",
+  "purpose": "实现前冻结的新增验证题；不得用于权重选择。另有本机新来源片段题。",
+  "cases": [
+    {
+      "id": "fresh-00",
+      "category": "file-version",
+      "query": "AuroraPanel_v3.7.html 放在哪了？",
+      "target": "移动版页面 AuroraPanel_v3.7.html 已保存到交付目录。",
+      "distractors": [
+        "AuroraPanel_v3.8.html 是下周准备做的新版本。",
+        "AuroraPanel_v2.7.html 是已经淘汰的旧页面。"
+      ]
+    },
+    {
+      "id": "fresh-01",
+      "category": "identifier",
+      "query": "max_render_queue_depth 这个参数是什么意思？",
+      "target": "max_render_queue_depth 指同一时刻允许排队的渲染任务上限。",
+      "distractors": [
+        "max_render_queue_size 是界面显示的队列长度。",
+        "渲染参数解释在设计说明里。"
+      ]
+    },
+    {
+      "id": "fresh-02",
+      "category": "path",
+      "query": "请找一下 reports/atlas-weekly.md 的说明。",
+      "target": "reports/atlas-weekly.md 保存每周观测摘要，只记录已验证的数据。",
+      "distractors": [
+        "reports/atlas-monthly.md 保存每月观测摘要。",
+        "notes/atlas-weekly.md 只是临时草稿。"
+      ]
+    },
+    {
+      "id": "fresh-03",
+      "category": "short-code",
+      "query": "R7 的校验结果是什么？",
+      "target": "R7 的校验已经通过，传感器读数稳定。",
+      "distractors": [
+        "R70 的校验失败，需要重新安装传感器。",
+        "XR7 的校验仍在排队。"
+      ]
+    },
+    {
+      "id": "fresh-04",
+      "category": "mixed-id",
+      "query": "之前讲的 batch_flush_interval_ms 怎么设置？",
+      "target": "batch_flush_interval_ms 设为 250，用来控制批量写入间隔。",
+      "distractors": [
+        "batch_flush_timeout_ms 设为 900，超时后放弃等待。",
+        "普通日志每秒写一次。"
+      ]
+    },
+    {
+      "id": "fresh-05",
+      "category": "version",
+      "query": "请回顾 VelaSDK-2.4.1 的兼容性结论。",
+      "target": "VelaSDK-2.4.1 能兼容旧格式，但要关闭自动迁移。",
+      "distractors": [
+        "VelaSDK-2.4.10 已移除旧格式兼容。",
+        "VelaSDK-2.5.1 还没进行兼容性测试。"
+      ]
+    },
+    {
+      "id": "fresh-06",
+      "category": "quote-cn",
+      "query": "“只保存确认后的版本”当时是怎么约定的？",
+      "target": "归档约定是只保存确认后的版本，讨论稿放在临时目录。",
+      "distractors": [
+        "先保存所有版本，确认之后再清理。",
+        "版本记录会保存作者和时间。"
+      ]
+    },
+    {
+      "id": "fresh-07",
+      "category": "quote-long",
+      "query": "找一下“雨停以后再去山顶观测”的原话。",
+      "target": "我们说好雨停以后再去山顶观测，雨还在下就留在营地。",
+      "distractors": [
+        "山顶观测计划定在周末，天气好就出发。",
+        "下雨的时候可以在山脚拍照片。"
+      ]
+    },
+    {
+      "id": "fresh-08",
+      "category": "quote-ascii-fragment",
+      "query": "之前提到的“telemetry_packet_w”是在说什么？",
+      "target": "telemetry_packet_window 控制遥测包的缓存窗口，默认保留十个包。",
+      "distractors": [
+        "telemetry_window_count 统计打开的监控窗口。",
+        "packet_write_timeout 是遥测包写入超时。"
+      ]
+    },
+    {
+      "id": "fresh-09",
+      "category": "filename-case",
+      "query": "LUMEN_VIEW_02.SVG 是哪个图？",
+      "target": "Lumen_View_02.svg 是灯具的侧面结构图，正面图另存了。",
+      "distractors": [
+        "Lumen_View_20.svg 是灯具的正面结构图。",
+        "Lumen_View_02.png 是旧照片，不是结构图。"
+      ]
+    },
+    {
+      "id": "fresh-10",
+      "category": "quote-punctuation",
+      "query": "“红灯亮时，不要断电”这条提醒在哪里？",
+      "target": "操作提醒：红灯亮时，不要断电，等待写入结束再关闭。",
+      "distractors": [
+        "红灯亮时可以尝试重新插电。",
+        "白灯常亮代表设备启动完成。"
+      ]
+    },
+    {
+      "id": "fresh-11",
+      "category": "id-tail",
+      "query": "查一下 export_manifest_sha256 的用途。",
+      "target": "export_manifest_sha256 用于校验导出清单，避免拿错文件。",
+      "distractors": [
+        "import_manifest_sha256 用于导入前校验。",
+        "export_manifest_sha512 是另一个尚未启用的字段。"
+      ]
+    },
+    {
+      "id": "fresh-12",
+      "category": "paraphrase-food",
+      "query": "给我挑夜宵时，有什么不能加？",
+      "target": "我对花生过敏，夜宵里也不能放花生碎。",
+      "distractors": [
+        "我喜欢看夜宵摊制作甜点。",
+        "夜宵不要做得太复杂。"
+      ]
+    },
+    {
+      "id": "fresh-13",
+      "category": "paraphrase-sound",
+      "query": "我写材料时，播放什么声音比较合适？",
+      "target": "写报告的时候我希望完全安静，连轻音乐也先关掉。",
+      "distractors": [
+        "我周末喜欢听爵士乐。",
+        "报告可以配一张轻松的封面。"
+      ]
+    },
+    {
+      "id": "fresh-14",
+      "category": "paraphrase-temporary",
+      "query": "最近安排步行路线，需要注意什么？",
+      "target": "我这两周脚踝受伤，先避免楼梯，恢复后走路没有限制。",
+      "distractors": [
+        "我平时喜欢走山路。",
+        "下个月有一次登山活动。"
+      ]
+    },
+    {
+      "id": "fresh-15",
+      "category": "paraphrase-preference",
+      "query": "给我选一个会议座位时该考虑什么？",
+      "target": "我开会时需要看清投影，尽量坐在前排靠中间。",
+      "distractors": [
+        "会议室的后排比较凉快。",
+        "我吃饭喜欢坐靠窗的位置。"
+      ]
+    },
+    {
+      "id": "fresh-16",
+      "category": "paraphrase-deadline",
+      "query": "河岸采样报告最迟什么时候交？",
+      "target": "河岸采样报告要在星期四下午五点前提交给组长。",
+      "distractors": [
+        "河岸采样计划周五才开始。",
+        "湖区采样报告周三交。"
+      ]
+    },
+    {
+      "id": "fresh-17",
+      "category": "paraphrase-condition",
+      "query": "温室的窗户什么时候才能打开？",
+      "target": "只有室外温度超过十八度且没有大风，温室才开窗。",
+      "distractors": [
+        "温室上午九点开灯。",
+        "室外花坛下雨时不用浇水。"
+      ]
+    },
+    {
+      "id": "fresh-18",
+      "category": "paraphrase-device",
+      "query": "那台银色打印机应该放在哪里？",
+      "target": "银色打印机搬到资料室东侧桌面，别再放在门口。",
+      "distractors": [
+        "黑色扫描仪仍放在门口。",
+        "资料室西侧桌面要留给装订机。"
+      ]
+    },
+    {
+      "id": "fresh-19",
+      "category": "paraphrase-date",
+      "query": "我哪天去办理图书证？",
+      "target": "图书证预约在下周三上午，周二只去取照片。",
+      "distractors": [
+        "图书馆星期三下午休息。",
+        "护照预约在星期四。"
+      ]
+    },
+    {
+      "id": "fresh-20",
+      "category": "paraphrase-current",
+      "query": "青石实验现在准备采用哪种测量方法？",
+      "target": "青石实验后来确认采用称重法，之前的计数法方案作废。",
+      "distractors": [
+        "白石实验依然用计数法。",
+        "青石实验最初讨论过计数法。"
+      ]
+    },
+    {
+      "id": "fresh-21",
+      "category": "paraphrase-subject",
+      "query": "小岚能参加周末的排练吗？",
+      "target": "小岚周六值班，只能参加周日下午的排练。",
+      "distractors": [
+        "小叶周六下午能来排练。",
+        "周六排练在二楼教室。"
+      ]
+    },
+    {
+      "id": "fresh-22",
+      "category": "paraphrase-permission",
+      "query": "什么时候可以把观察日志发给其他人？",
+      "target": "观察日志先由我检查，得到我的明确同意后再分享。",
+      "distractors": [
+        "检查观察日志时要保留原始时间。",
+        "公开的天气表可以自由分享。"
+      ]
+    },
+    {
+      "id": "fresh-23",
+      "category": "paraphrase-limit",
+      "query": "帮我安排长途出行，座位有什么要求？",
+      "target": "坐长途车我容易晕车，希望坐前排靠窗的位置。",
+      "distractors": [
+        "短途通勤我一般站着。",
+        "我在办公室喜欢坐靠门的位置。"
+      ]
+    }
+  ]
+}

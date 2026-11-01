@@ -31,6 +31,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp==1.30.0",  # 固定已验收的1.x协议/客户端；仅显式宿主启用时导入
+]
 documents = [
     "pypdf>=6.10,<7",
     "reportlab>=4.4.9,<5",

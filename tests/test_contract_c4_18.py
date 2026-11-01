@@ -92,16 +92,31 @@ class NapCatTurnDispatcherTests(unittest.TestCase):
         host.handle_event(self._event("m-q1", "你看这是谁"), at=2.0)
         dispatcher.flush()
 
-        self.assertTrue(turns[1].visual_context_inherited)
-        self.assertEqual(turns[1].visual_context_source_message_id, "m-img")
-        self.assertEqual(turns[1].visuals_for("m-q1"), ())
-        self.assertEqual(turns[1].visuals_for("m-img")[0].reference, "data:image/png;base64,aGVsbG8=")
+        # A lexical signal offers a candidate. Only a semantic decision plus
+        # host validation can promote the retained original to model input.
+        from shinku.qq.visual_selection import apply_selection
+        self.assertFalse(turns[1].visual_context_inherited)
+        self.assertEqual(turns[1].visuals_for("m-img"), ())
+        self.assertEqual(turns[1].visual_candidates[0]["message_id"], "m-img")
+        context = {"qq_turn": turns[1]}
+        result, error = apply_selection(context, {"visual_context": {"action": "select",
+            "source_ids": [turns[1].visual_candidates[0]["source_id"]]}})
+        self.assertEqual((result, error), ("select", ""))
+        selected = context["qq_turn"]
+        self.assertTrue(selected.visual_context_inherited)
+        self.assertEqual(selected.visual_context_source_message_id, "m-img")
+        self.assertEqual(selected.visuals_for("m-q1"), ())
+        self.assertEqual(selected.visuals_for("m-img")[0].reference, "data:image/png;base64,aGVsbG8=")
 
         now[0] = 2.0
         host.handle_event(self._event("m-unrelated", "天气怎么样"), at=3.0)
         dispatcher.flush()
         self.assertFalse(turns[2].visual_context_inherited)
         self.assertEqual(turns[2].visuals_for("m-unrelated"), ())
+        self.assertTrue(turns[2].visual_candidates)
+        apply_selection({"qq_turn": turns[2]}, {"visual_context": {"action": "none",
+            "source_ids": [], "topic_change": True}})
+        self.assertFalse(dispatcher._visual_context[(selected.conversation_type, selected.conversation_id, "m-img")].followup_open)
 
     def test_slow_handler_does_not_block_ingress_and_preserves_conversation_order(self) -> None:
         started = threading.Event()

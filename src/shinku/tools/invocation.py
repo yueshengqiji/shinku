@@ -76,6 +76,9 @@ class ToolResultEnvelope:
     model_feedback: str
     data: dict[str, Any] | None = None
     events: list[dict[str, Any]] = field(default_factory=list)
+    # Trusted dispatch fact, independent of success and handler-supplied data.
+    # True means the handler was called; None preserves unknown legacy facts.
+    executed: bool | None = None
 
 
 def _arguments_from(tool_call: dict[str, Any]) -> dict[str, Any]:

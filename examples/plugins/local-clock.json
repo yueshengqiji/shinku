@@ -1,0 +1,10 @@
+{
+  "plugins": [
+    {
+      "id": "local-clock",
+      "version": "example",
+      "factory": "shinku.plugins.examples.local_clock:create",
+      "description": "本机时间只读示例；安装不等于接入生产实例。"
+    }
+  ]
+}

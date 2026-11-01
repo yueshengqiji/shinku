@@ -10,20 +10,23 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 import html
+import json
 import re
 from typing import Any
+
+from .cards import CARD_KINDS, card_context, cq_segments
 
 __all__ = ["IncomingMessage", "MessageSegment", "is_group_increase_event", "is_poke_event"]
 
 
 _MEDIA_KINDS = frozenset({"image", "file", "audio", "video"})
-_KNOWN_KINDS = _MEDIA_KINDS | frozenset({"text", "at", "reply", "face", "poke", "unknown"})
+_KNOWN_KINDS = _MEDIA_KINDS | frozenset({"text", "at", "reply", "face", "poke", "unknown"}) | CARD_KINDS
 _ID_KEYS = ("message_id", "messageId", "id")
 _HTML_IMAGE_RE = re.compile(
     r"<img\b[^>]*?\bsrc\s*=\s*(?P<quote>['\"])(?P<src>.*?)(?P=quote)[^>]*?/?>",
     re.IGNORECASE | re.DOTALL,
 )
-_CQ_IMAGE_RE = re.compile(r"\[CQ:image(?P<attrs>[^\]]*)\]", re.IGNORECASE)
+_CQ_SEGMENT_RE = re.compile(r"\[CQ:\w+(?:,[^\]]*)?\]", re.IGNORECASE)
 
 
 def _first_text(mapping: Mapping[str, Any], *keys: str) -> str:
@@ -39,13 +42,10 @@ def _mapping_copy(value: Any) -> dict[str, Any]:
 
 
 def _inline_message_segments(value: str) -> tuple["MessageSegment", ...]:
-    """Decode image markup that some QQ bridges put in a plain string.
+    """兼容字符串消息中的 CQ 段和 HTML 图片，保留卡片/引用/媒体的原有顺序。
 
-    OneBot normally sends image segments.  A few QQ/NapCat paths instead put
-    ``<img src=...>`` or ``[CQ:image,...]`` in ``raw_message``.  Treating
-    those strings as ordinary text is irreversible: the visual bridge never
-    gets a file reference.  This parser only recognizes explicit image
-    markers and leaves surrounding text untouched.
+    CQ 的属性由独立单层解码器处理，JSON 内编码逗号不能变成新的属性。
+    这里只归一化，不访问网络；HTML 仅识别现有 img src 兼容入口。
     """
 
     text = str(value or "")
@@ -63,24 +63,10 @@ def _inline_message_segments(value: str) -> tuple["MessageSegment", ...]:
                 MessageSegment.from_value({"type": "image", "data": {"url": source}}),
             )
         )
-    for match in _CQ_IMAGE_RE.finditer(text):
-        attrs: dict[str, str] = {}
-        raw_attrs = str(match.group("attrs") or "").lstrip(",")
-        for item in raw_attrs.split(","):
-            if "=" not in item:
-                continue
-            key, raw_value = item.split("=", 1)
-            key = key.strip()
-            raw_value = html.unescape(raw_value.strip())
-            if key and raw_value:
-                attrs[key] = raw_value
-        matches.append(
-            (
-                match.start(),
-                match.end(),
-                MessageSegment.from_value({"type": "image", "data": attrs}),
-            )
-        )
+    for match in _CQ_SEGMENT_RE.finditer(text):
+        decoded = cq_segments(match.group(0))
+        if decoded:
+            matches.append((match.start(), match.end(), MessageSegment.from_value(decoded[0])))
     if not matches:
         return (MessageSegment(kind="text", text=text),)
 
@@ -96,7 +82,7 @@ def _inline_message_segments(value: str) -> tuple["MessageSegment", ...]:
         cursor = end
     if cursor < len(text):
         segments.append(MessageSegment(kind="text", text=text[cursor:]))
-    return tuple(segment for segment in segments if segment.text or segment.is_media)
+    return tuple(segment for segment in segments if segment.text or segment.kind != "text")
 
 
 def is_poke_event(event: Mapping[str, Any]) -> bool:
@@ -186,12 +172,20 @@ class MessageSegment:
     def attachment_ref(self) -> dict[str, str] | None:
         if not self.is_media:
             return None
-        return {
+        result = {
             "kind": self.kind,
             "media_id": self.media_id,
             "url": self.url,
             "local_path": self.local_path,
         }
+        if self.kind == "file":
+            data = _mapping_copy(self.payload.get("data"))
+            merged = {**self.payload, **data}
+            # NapCat 的 file 是展示文件名，file_id 才是平台读取标识；不能互相覆盖。
+            result.update(file_id=_first_text(merged, "file_id", "fileId", "id"),
+                          name=_first_text(merged, "name", "file", "file_name"),
+                          size=_first_text(merged, "file_size", "size"))
+        return result
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind}
@@ -221,6 +215,8 @@ class IncomingMessage:
     raw_event: dict[str, Any] = field(default_factory=dict)
     event_kind: str = "message"
     quoted_message: dict[str, Any] = field(default_factory=dict)
+    # 仅宿主解析器生成；不接受事件自报的已读取资料，正文仍独立供控制指令判断。
+    card_context: str = ""
 
     @classmethod
     def from_event(cls, event: Mapping[str, Any]) -> "IncomingMessage":
@@ -324,11 +320,22 @@ class IncomingMessage:
             raw_event=dict(event),
             event_kind=event_kind,
             quoted_message=quoted_message,
+            card_context=card_context(segments),
         )
 
     @property
     def text(self) -> str:
         return "".join(segment.text for segment in self.segments if segment.kind in {"text", "at", "face", "poke"})
+
+    @property
+    def readable_text(self) -> str:
+        """给模型/只读上下文的资料视图；text 保持当前用户正文，防止引用触发控制。"""
+        if not self.card_context:
+            return self.text
+        origin = json.dumps({"message_id": self.message_id, "sender_id": self.sender_id,
+                             "conversation_id": self.conversation_id,
+                             "conversation_type": self.conversation_type}, ensure_ascii=False)
+        return f"{self.text}\n[QQ资料来源] {origin}\n{self.card_context}".strip()
 
     @property
     def has_at_mention(self) -> bool:
@@ -420,7 +427,7 @@ class IncomingMessage:
     @property
     def quoted_text(self) -> str:
         value = self.quoted_message if isinstance(self.quoted_message, Mapping) else {}
-        return str(value.get("text") or value.get("raw_message") or "").strip()
+        return str(value.get("readable_text") or value.get("text") or value.get("raw_message") or "").strip()
 
     @property
     def quoted_attachments(self) -> tuple[dict[str, str], ...]:
@@ -459,6 +466,8 @@ class IncomingMessage:
             "sender_label": self.sender_label,
             "segments": [segment.as_dict() for segment in self.segments],
             "text": self.text,
+            "readable_text": self.readable_text,
+            "card_context": self.card_context,
             "attachments": [dict(item) for item in self.attachments],
             "reply_message_ids": list(self.reply_message_ids),
             "quoted_message": dict(self.quoted_message) if self.quoted_message else None,

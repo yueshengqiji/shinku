@@ -1,7 +1,7 @@
 """Bounded conversational task state, separate from persona/long-term memory.
 
-Model interpretation is not authorization or executor evidence. Contracts are
-append-only: a follow-up may add requirements, never silently remove old ones.
+模型解释不授予权限或执行证明。用户目标与硬条件只能追加；宿主登记的
+说明性调查计划允许修订，旧原件由保存事务保留，不能抹掉执行回执。
 Restoring this database does not replay a tool or restore permission grants.
 """
 
@@ -76,12 +76,12 @@ def validate_contract(value: Any) -> dict[str, Any]:
             requirements[-1]["target_selector"] = normalized
         if "checks" in item:
             checks = item["checks"]
-            allowed = {"contains", "sha256", "min_bytes", "http_status", "page_contains", "receipt_required", "required_fields", "min_sources", "require_dates", "date_kinds", "source_pages", "unchanged"}
+            allowed = {"contains", "sha256", "min_bytes", "http_status", "page_contains", "receipt_required", "required_fields", "min_sources", "require_dates", "date_kinds", "source_pages", "unchanged", "command", "exit_code"}
             if not isinstance(checks, Mapping) or set(checks) - allowed:
                 raise TaskContractError("invalid_result_checks", field_path=path + ".checks")
             for key, val in checks.items():
                 check_path = path + ".checks." + key
-                if key in {"contains", "page_contains", "sha256"}:
+                if key in {"contains", "page_contains", "sha256", "command"}:
                     _text(val, 2000, field_path=check_path)
                 elif key == "required_fields":
                     _texts(val, limit=8, nonempty=True, field_path=check_path)
@@ -106,6 +106,13 @@ def validate_contract(value: Any) -> dict[str, Any]:
                 elif type(val) is not int or val < 0:
                     raise TaskContractError("invalid_result_checks", field_path=check_path)
             requirements[-1]["checks"] = dict(checks)
+        if requirements[-1]["effect"] == "command_run":
+            checks = requirements[-1].get("checks", {})
+            if (requirements[-1]["targets"] or set(checks) != {"command", "exit_code"}
+                    or checks.get("exit_code") != 0 or type(checks.get("exit_code")) is not int):
+                raise TaskContractError("command_run_requires_exact_command_and_zero_exit")
+        elif any(k in requirements[-1].get("checks", {}) for k in ("command", "exit_code")):
+            raise TaskContractError("command_check_requires_command_run_effect")
         if requirements[-1]["effect"] == "research_answer" and requirements[-1]["targets"]:
             raise TaskContractError("research_answer_requires_evidence_bindings_not_placeholder_targets")
         if requirements[-1]["effect"] == "local_answer":
@@ -174,6 +181,10 @@ _SECRET_TEXT = re.compile(
 
 def _is_secret_key(key: Any, value: Any) -> bool:
     name = str(key or "").strip().lower()
+    # 持续任务的累计上限用null表示；无内容可泄露，必须原样落盘才能恢复。
+    # 仅豁免这个空容量值，字符串形式的同名凭据仍照常脱敏。
+    if name == "max_tokens" and value is None:
+        return False
     # Only numeric usage metrics are harmless; a credential named "tokens"
     # must not inherit a global key-name exemption.
     if (name in _EXCLUDED_TOKEN_KEYS or name.endswith("_tokens")) and type(value) in (int, float):
@@ -183,14 +194,20 @@ def _is_secret_key(key: Any, value: Any) -> bool:
     return bool(_SECRET_KEY.search(name)) or name in _EXCLUDED_TOKEN_KEYS or name.endswith("_tokens")
 
 
-def redact(value: Any, *, depth: int = 0) -> Any:
+def redact(value: Any, *, depth: int = 0, losses=None, path=()) -> Any:
     if depth > 10:
+        if losses is not None:
+            losses.append({"path": list(path), "reason": "snapshot_depth_limit", "omitted": 1})
         return "[omitted]"
     if isinstance(value, Mapping):
-        return {str(key): "[redacted]" if _is_secret_key(key, item) else redact(item, depth=depth + 1)
+        if losses is not None and len(value) > 80:
+            losses.append({"path": list(path), "reason": "snapshot_mapping_limit",
+                           "total": len(value), "retained": 80, "omitted": len(value) - 80})
+        return {str(key): "[redacted]" if _is_secret_key(key, item) else redact(item, depth=depth + 1,
+                    losses=losses, path=(*path, str(key)))
                 for key, item in list(value.items())[:80]}
     if isinstance(value, (list, tuple)):
-        return [redact(item, depth=depth + 1) for item in value]
+        return [redact(item, depth=depth + 1, losses=losses, path=(*path, index)) for index, item in enumerate(value)]
     if isinstance(value, str):
         return _SECRET_TEXT.sub(lambda match: (match.group(1) or match.group(2)) + "[redacted]", value)
     if value is None or isinstance(value, (bool, int, float)):
@@ -211,8 +228,11 @@ class AgentTaskStore:
         self.max_entries = max(1, min(2048, int(max_entries)))
         self._lock = threading.RLock()
         self._closed = False
+        self.result_events = None  # Explicit host opt-in; no default migration.
         self._db = None if self.path else sqlite3.connect(":memory:", check_same_thread=False, timeout=10)
         with self._transaction() as db:
+            from .work_state import init_table
+            init_table(db)
             db.execute("""CREATE TABLE IF NOT EXISTS agent_conversation_tasks (
                 task_id TEXT PRIMARY KEY, requester TEXT NOT NULL, session TEXT NOT NULL,
                 updated REAL NOT NULL, payload TEXT NOT NULL)""")
@@ -241,14 +261,42 @@ class AgentTaskStore:
                 self._db.close()
 
     def _prune(self, db, now: float) -> None:
-        db.execute("DELETE FROM agent_conversation_tasks WHERE updated < ? OR updated > ?",
+        if self.result_events is not None:
+            self.result_events.prune_tasks_in_transaction(db, now)
+            db.execute("DELETE FROM agent_task_work_revisions WHERE task_id NOT IN (SELECT task_id FROM agent_conversation_tasks)")
+            return
+        # 人工等待不计入历史淘汰；由显式取消/完成解除保留，不能让迟到回答丢失任务。
+        pinned = "json_extract(payload, '$.status') = 'waiting_user'"
+        db.execute(f"DELETE FROM agent_conversation_tasks WHERE NOT ({pinned}) AND (updated < ? OR updated > ?)",
                          (now - self.ttl_seconds, now + 300))
-        db.execute("""DELETE FROM agent_conversation_tasks WHERE task_id IN
-            (SELECT task_id FROM agent_conversation_tasks ORDER BY updated DESC, rowid DESC LIMIT -1 OFFSET ?)""",
+        db.execute(f"""DELETE FROM agent_conversation_tasks WHERE task_id IN
+            (SELECT task_id FROM agent_conversation_tasks WHERE NOT ({pinned}) ORDER BY updated DESC, rowid DESC LIMIT -1 OFFSET ?)""",
                          (self.max_entries,))
+        db.execute("DELETE FROM agent_task_work_revisions WHERE task_id NOT IN (SELECT task_id FROM agent_conversation_tasks)")
 
-    def save(self, state: Mapping[str, Any], *, now: float | None = None) -> dict[str, Any]:
-        safe = redact(copy.deepcopy(dict(state)))
+    def save(self, state: Mapping[str, Any], *, now: float | None = None, work_state=None) -> dict[str, Any]:
+        losses = []
+        source = copy.deepcopy(dict(state))
+        sealed = source.get("execution_result")
+        if isinstance(sealed, dict) and sealed.get("schema_version") == 1:
+            import hashlib
+            digest = hashlib.sha256(json.dumps({k: v for k, v in sealed.items() if k != "result_hash"},
+                ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+            if digest == sealed.get("result_hash") and redact(sealed) == sealed:
+                source.pop("execution_result")
+            else:
+                sealed = None
+        else:
+            sealed = None
+        safe = redact(source, losses=losses)
+        if sealed is not None:
+            # Already sealed/scrubbed at its own boundary; nesting it under a
+            # task must not clip its information metadata and invalidate hash.
+            safe["execution_result"] = sealed
+        if losses:
+            safe["snapshot_information"] = {"schema_version": 1, "status": "incomplete", "gap_count": len(losses),
+                "gaps": losses[:128], "omitted_gap_records": max(0, len(losses) - 128),
+                "source_completeness": "unknown", "retrieval": "retained_material_or_unavailable"}
         for name in ("task_id", "requester", "session"):
             _text(safe.get(name), 256)
         # Never trim immutable original requests/contracts to fit a snapshot.
@@ -273,8 +321,6 @@ class AgentTaskStore:
                 updates["page_content_requires_refresh"] = True
         safe["updated"] = self.clock() if now is None else float(now)
         payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
-        if len(payload.encode("utf-8")) > 1048576:
-            raise TaskContractError("task_snapshot_too_large")
         with self._transaction() as db:
             existing = db.execute("SELECT requester, session, payload FROM agent_conversation_tasks WHERE task_id=?",
                                         (safe["task_id"],)).fetchone()
@@ -287,14 +333,38 @@ class AgentTaskStore:
                 old_requests = previous.get("requests", [])
                 if safe.get("requests", [])[:len(old_requests)] != old_requests:
                     raise TaskContractError("original_requests_removed_or_changed")
+                if previous.get("input_mode") != safe.get("input_mode"):
+                    raise TaskContractError("task_input_mode_changed")
                 if previous.get("contract") is not None:
-                    preserved = extend_contract(previous["contract"], safe.get("contract"))
+                    # 持久化层同样验证已登记计划的修订，不能只让内存循环放行。
+                    # 原请求新增严格要求后，不沿用旧策略降低条件。
+                    from .analysis_contract import merge_plan
+                    basis = {**previous, "requests": safe.get("requests", [])}
+                    preserved = merge_plan(basis, safe.get("contract"))
                     if preserved != safe.get("contract"):
                         raise TaskContractError("original_goal_or_scope_changed")
+                if safe.get("contract") is not None:
+                    from .analysis_contract import origin_record
+                    # 不相信提交快照自报的归属；依据库内旧记录重新生成。
+                    basis = {**previous, "requests": safe.get("requests", [])}
+                    safe["analysis_plan_origin"] = origin_record(basis, safe["contract"])
+                safe["contract_history"] = copy.deepcopy(previous.get("contract_history", []))
+                if safe.get("contract") != previous.get("contract"):
+                    safe["contract_history"].append(copy.deepcopy(previous.get("contract")))
+            elif safe.get("analysis_plan_origin"):
+                # 导入旧任务只能保留硬条件，不通过外部快照伪造可删改来源。
+                safe.pop("analysis_plan_origin", None)
             safe["revision"] = int((previous or {}).get("revision", 0)) + 1
+            from .work_state import persist, compact_plan_calls
+            persist(db, safe, previous, work_state)
+            compact_plan_calls(db, safe)
             payload = json.dumps(safe, ensure_ascii=False, separators=(",", ":"))
+            if len(payload.encode("utf-8")) > 1048576:
+                raise TaskContractError("task_snapshot_too_large")
             db.execute("INSERT OR REPLACE INTO agent_conversation_tasks VALUES (?, ?, ?, ?, ?)",
                              (safe["task_id"], safe["requester"], safe["session"], safe["updated"], payload))
+            if self.result_events is not None:
+                self.result_events.append_in_transaction(db, safe)
             self._prune(db, safe["updated"])
         return safe
 
@@ -312,6 +382,48 @@ class AgentTaskStore:
             row = db.execute("SELECT payload FROM agent_conversation_tasks WHERE task_id=? AND requester=? AND session=?",
                                    (task_id, requester, session)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def get_work_state(self, task_id, *, requester, session, revision=None):
+        """当前双重作用域和 TTL 内读取导航修订；读取不刷新任务寿命。"""
+        from .work_state import read
+        with self._transaction() as db:
+            now = self.clock()
+            row = db.execute("SELECT payload FROM agent_conversation_tasks WHERE task_id=? AND requester=? AND session=? AND updated>=? AND updated<=?",
+                (task_id, requester, session, now - self.ttl_seconds, now + 300)).fetchone()
+            return read(db, json.loads(row[0]), revision) if row else None
+
+    def read_scoped_page(self, *, requester: str, session: str, offset: int = 0,
+                         limit: int = 10, task_id: str = "", exclude: str = "") -> dict[str, Any]:
+        """只读诊断分页：按双重作用域及TTL筛选，不清理、刷新或改写旧证据。
+
+        正常get/candidates拥有清理生命周期；诊断不能因观察而删除过期原件。
+        offset分页描述本次读取时的账本，新任务写入后需从首页重新定位。
+        """
+        if type(offset) is not int or not 0 <= offset <= 2048 or type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("task_record_page_invalid")
+        now = self.clock()
+        where = "requester=? AND session=? AND updated>=? AND updated<=? AND task_id!=?"
+        params = [requester, session, now - self.ttl_seconds, now + 300, exclude]
+        if task_id:
+            where += " AND task_id=?"
+            params.append(task_id)
+        with self._transaction() as db:
+            total = db.execute("SELECT COUNT(*) FROM agent_conversation_tasks WHERE " + where, params).fetchone()[0]
+            rows = db.execute("SELECT payload FROM agent_conversation_tasks WHERE " + where +
+                " ORDER BY updated DESC, task_id DESC LIMIT ? OFFSET ?", [*params, limit, offset]).fetchall()
+        return {"items": [json.loads(row[0]) for row in rows], "total": total, "observed_at": now}
+
+    def for_message_ids(self, message_ids, *, requester: str, session: str) -> list[dict[str, Any]]:
+        """Read source-request bindings across the retained scoped ledger."""
+        identifiers = set(str(v) for v in tuple(message_ids)[:32])
+        if not identifiers:
+            return []
+        with self._transaction() as db:
+            self._prune(db, self.clock())
+            rows = db.execute("SELECT payload FROM agent_conversation_tasks WHERE requester=? AND session=? ORDER BY updated DESC",
+                              (requester, session)).fetchall()
+        tasks = [json.loads(row[0]) for row in rows]
+        return [t for t in tasks if any(r.get("message_id") in identifiers for r in t.get("requests", []))][:3]
 
 
 def new_task(*, task_id: str, requester: str, session: str, request: str,

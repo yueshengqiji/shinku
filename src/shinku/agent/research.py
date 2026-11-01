@@ -48,7 +48,10 @@ def text_list(value: Any, limit: int = 8) -> list[str]:
 
 
 def visible_urls(answer: str) -> set[str]:
-    return {url for value in re.findall(r"https?://[^\s<>\[\]()\"'，。；]+", answer)
+    # Citation wrappers delimit an address in prose. Keep the full address,
+    # including Unicode paths and encoded punctuation, rather than accepting
+    # a source merely because it is a prefix of a different visible URL.
+    return {url for value in re.findall(r"https?://[^\s<>\[\]()\"'`，。；（）「」『』【】《》〈〉“”‘’]+", answer)
             if (url := source_url(value.rstrip(".,;!?：")))}
 
 
@@ -237,9 +240,13 @@ class ResearchLedger:
             if answer:
                 projected.pop("title", None)
             read_sources.append(projected)
+        read_urls = {url for row in self.sources.values() for url in (row["url"], row["requested_url"])}
+        unread = [{"id": row["id"], "url": row["url"], "relevance": row["relevance"],
+                   "body_evidence": False} for row in self.candidates.values() if row["url"] not in read_urls]
         return {"original_request": goal[:5000], "required_fields": self.required_fields(context),
             "research_requirements": self.research_requirements(context),
             "intent": copy.deepcopy(self.intent), "candidates": [] if answer else list(self.candidates.values())[-24:],
+            "unread_candidate_refs": unread[-24:], "omitted_unread_candidate_refs": max(0, len(unread) - 24),
             "read_sources": read_sources,
             "answer": answer[:10000]}
 
@@ -302,21 +309,36 @@ class ResearchLedger:
         limitations = []
         known_conditions = {row.get("id") for row in self.research_requirements(context) if isinstance(row.get("id"), str)}
         rows = value.get("limitations", []) if isinstance(value, Mapping) else []
-        for row in rows[:16] if isinstance(rows, list) else []:
+        if not isinstance(rows, list) or len(rows) > 16:
+            rows = []
+            errors.append("invalid_limitation_list")
+        for index, row in enumerate(rows):
             if not isinstance(row, Mapping):
+                errors.append(f"limitation_{index}:invalid")
                 continue
             fragment = short_text(row.get("answer_fragment"), 500)
             if (not fragment or len(str(row.get("answer_fragment", ""))) > 500
                     or normalized_text(fragment) not in normalized_text(answer)):
+                errors.append(f"limitation_{index}:unbound_text")
                 continue
-            fields = [item for item in text_list(row.get("fields"), 16) if item in required]
-            conditions = [item for item in text_list(row.get("condition_ids"), 32) if item in known_conditions]
-            if fields or conditions:
-                limitations.append({"answer_fragment": fragment, "fields": fields, "condition_ids": conditions,
-                    "semantic_origin": "model_limitation_review"})
+            fields, conditions = row.get("fields", []), row.get("condition_ids", [])
+            if (not isinstance(fields, list) or len(fields) > 16
+                    or not isinstance(conditions, list) or len(conditions) > 32
+                    or any(not isinstance(item, str) or item not in required for item in fields)
+                    or any(not isinstance(item, str) or item not in known_conditions for item in conditions)):
+                errors.append(f"limitation_{index}:invalid_scope")
+                continue
+            if not fields and not conditions:
+                errors.append(f"limitation_{index}:unbound_scope")
+                continue
+            limitations.append({"answer_fragment": fragment, "fields": list(dict.fromkeys(fields)),
+                "condition_ids": list(dict.fromkeys(conditions)), "semantic_origin": "model_limitation_review"})
+            missing.extend(field for field in fields if field not in missing)
         self.answer_check = {"answer_sha256": digest(answer), "verdict": verdict, "bindings": bindings,
-            "covered_fields": list(dict.fromkeys(supported)), "missing_fields": missing,
-            "limitations": limitations, "errors": errors, "semantic_review_is_not_absolute_truth": True}
+            "covered_fields": list(dict.fromkeys(field for field in supported if field not in missing)),
+            "missing_fields": missing,
+            "limitations": limitations, "errors": errors, "answer_validation_version": 1,
+            "semantic_review_is_not_absolute_truth": True}
 
     def recommended_outcome(self, answer: str, outcome: str, context: Any) -> str:
         """Only lower an overclaimed research completion; never invent an answer.
@@ -357,9 +379,13 @@ class ResearchLedger:
         if not self._bindings_current():
             return CompletionVerdict(False, reason="答复绑定的正文已失效或版本变化，需要重新读取和复核。")
         if check.get("errors") or check.get("verdict") in {"unsupported", "invalid"}:
-            return CompletionVerdict(False, reason="研究答复证据绑定未通过：" + ", ".join(check.get("errors") or ["结论缺少正文支持"]))
+            first_cause = check.get("protocol_failure")
+            prefix = first_cause + "; " if first_cause in {
+                "research_review_output_truncated", "research_review_output_rejected", "research_review_output_incomplete"} else ""
+            return CompletionVerdict(False, reason="研究答复证据绑定未通过：" + prefix + ", ".join(check.get("errors") or ["结论缺少正文支持"]))
         if outcome == "completed" or not outcome:
-            if check.get("verdict") != "supported" or not check.get("bindings") or check.get("missing_fields"):
+            if (check.get("verdict") != "supported" or not check.get("bindings")
+                    or check.get("missing_fields") or check.get("limitations")):
                 return CompletionVerdict(False, reason="研究答案尚不完整或未得到正文支持；交付有依据的部分时明确 partial 和具体缺口。",
                     missing=tuple(check.get("missing_fields", [])))
         elif check.get("verdict") == "no_answer" and check.get("bindings"):
@@ -374,7 +400,8 @@ class ResearchLedger:
         if not bindings or not self._bindings_current() or self.answer_check.get("errors") or self.answer_check.get("verdict") not in {"supported", "partial"}:
             return False
         fields = text_list(checks.get("required_fields", []))
-        if not set(fields).issubset(self.answer_check.get("covered_fields", [])):
+        if (not set(fields).issubset(self.answer_check.get("covered_fields", []))
+                or set(fields).intersection(self.answer_check.get("missing_fields", []))):
             return False
         count = checks.get("min_sources", 1)
         if type(count) is not int or not 1 <= count <= 8 or len({row["url"] for row in bindings}) < count:
@@ -413,5 +440,5 @@ class ResearchLedger:
             "restoration_requires_source_refresh": True})
 
     def answer_review_key(self, answer: str, context: Any) -> str:
-        return digest(json.dumps({"answer": answer, "sources": sorted(self.sources),
+        return digest(json.dumps({"answer_validation_version": 1, "answer": answer, "sources": sorted(self.sources),
             "fields": self.required_fields(context), "requirements": self.research_requirements(context)}, ensure_ascii=False, sort_keys=True))

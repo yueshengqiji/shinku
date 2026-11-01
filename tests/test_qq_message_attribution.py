@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
 import json
@@ -82,6 +83,9 @@ class QQMessageAttributionTests(unittest.TestCase):
 
             def call_chat_json(self, **kwargs):
                 self.calls.append(kwargs)
+                review = dialogue_review_result(kwargs)
+                if review is not None:
+                    return review
                 return {"kind": "final", "text": "松饼"}
 
         with tempfile.TemporaryDirectory() as directory:
@@ -99,7 +103,8 @@ class QQMessageAttributionTests(unittest.TestCase):
             self.assertNotIn("当前发言者：blue（QQ blue-id）", bridge._group_context(turn))
             bridge.handle_turn(turn)
             self.assertTrue(runtime.calls)
-            self.assertTrue(runtime.calls[-1]["user_prompt"].rstrip().endswith(transcript[-1]["content"]))
+            self.assertEqual(len(runtime.calls), 1)
+            self.assertTrue(runtime.calls[0]["user_prompt"].rstrip().endswith(transcript[-1]["content"]))
             with service.store._connect() as conn:
                 rows = conn.execute(
                     "SELECT source_id, content, metadata_json FROM memory_turns WHERE scope = ? AND role = ? ORDER BY source_id",
@@ -353,6 +358,9 @@ class QQMessageAttributionTests(unittest.TestCase):
 
             def call_chat_json(self, **kwargs):
                 self.calls.append(kwargs)
+                review = dialogue_review_result(kwargs)
+                if review is not None:
+                    return review
                 return {"speech": "刚进群吧？欢迎。"}
 
         runtime = Runtime()

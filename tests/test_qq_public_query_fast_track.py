@@ -1,4 +1,5 @@
 """Public-question routing is bounded, anonymous and owner/policy checked."""
+from reply_review_fixture import dialogue_review_result
 import pytest
 import json
 from types import SimpleNamespace
@@ -51,6 +52,9 @@ class Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         blocks = "\n".join(kwargs.get("system_extra_blocks", []))
         if "答案证据与覆盖复核" in blocks:
             payload = json.loads(kwargs["user_prompt"])
@@ -181,8 +185,21 @@ def test_missing_new_or_continuing_task_intent_never_passes_public_gate(metadata
 
 
 def test_deep_research_stays_heavy_before_any_query_tool_executes():
-    runtime = Runtime(call(mode="new"))
+    metadata = {
+        "task_link": {"mode": "new"},
+        "task_contract": {
+            "goal": "深入研究多个来源的气候趋势并作对比",
+            "deliverables": ["多来源气候趋势对比"],
+            "scope": ["公开来源"],
+            "requirements": [{
+                "id": "r1", "description": "比较多个公开来源的气候趋势", "effect": "research_answer",
+                "targets": [], "checks": {"required_fields": ["气候趋势对比"], "min_sources": 2},
+            }],
+        },
+    }
+    runtime = Runtime(call(mode="new"), metadata)
     host, search, reader = bridge(runtime)
+    host._prepare_agent_task = QQAgentBridge._prepare_agent_task.__get__(host, QQAgentBridge)
     captured = []
     host._enqueue_agent_task = lambda *args, **kwargs: captured.append(kwargs) or QQAgentReply("queued", reason="heavy-test")
     reply = host.handle_turn(turn("深入研究多个来源的气候趋势并作对比"))
@@ -190,12 +207,16 @@ def test_deep_research_stays_heavy_before_any_query_tool_executes():
     assert not search.calls and not reader.calls
 
 
-def test_write_target_even_with_model_none_cannot_bypass_heavy_path():
-    runtime = Runtime(call())
+def test_write_target_none_route_enters_contract_preparation_without_query_execution():
+    runtime = Runtime(call(), {}, {})
     host, search, _ = bridge(runtime)
-    host._enqueue_agent_task = lambda *args, **kwargs: QQAgentReply("queued", reason="heavy-test")
+    host._prepare_agent_task = QQAgentBridge._prepare_agent_task.__get__(host, QQAgentBridge)
     reply = host.handle_turn(turn("查询天气并保存到 C:\\weather.txt"))
-    assert reply.reason == "heavy-test" and not search.calls
+    assert reply.agent_status != "completed"
+    assert not search.calls and host.task_coordinator.list() == []
+    assert len(runtime.calls) == 3
+    payload = json.loads(runtime.calls[1]["user_prompt"])
+    assert payload["task_link_options"] == [{"mode": "new"}]
 
 
 def test_non_owner_does_not_get_tools_or_execute_query():
@@ -207,9 +228,14 @@ def test_non_owner_does_not_get_tools_or_execute_query():
 
 @pytest.mark.parametrize("mode", ["confirm", "traditional"])
 def test_approval_required_profile_does_not_use_public_bypass(mode):
-    host, search, _ = bridge(Runtime(call()), state=QQCommandState(permission_mode=mode))
-    host._enqueue_agent_task = lambda *args, **kwargs: QQAgentReply("queued", reason="checked-heavy")
-    assert host.handle_turn(turn()).reason == "checked-heavy" and not search.calls
+    runtime = Runtime(call(), {}, {})
+    host, search, _ = bridge(runtime, state=QQCommandState(permission_mode=mode))
+    host._prepare_agent_task = QQAgentBridge._prepare_agent_task.__get__(host, QQAgentBridge)
+    reply = host.handle_turn(turn())
+    assert reply.agent_status != "completed"
+    assert not search.calls and host.task_coordinator.list() == []
+    assert len(runtime.calls) == 3
+    assert json.loads(runtime.calls[1]["user_prompt"])["task_link_options"] == [{"mode": "new"}]
 
 
 def test_three_tools_are_a_hard_cap_then_model_must_answer_without_tools():

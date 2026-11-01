@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
@@ -26,7 +27,7 @@ from . import names
 from .config import ensure_directories, load_project_env, load_settings
 from .qq.config import NapCatConnectionConfig
 from .qq.host import NapCatHost
-from .qq.napcat import NapCatImageMaterializer, NapCatVisualInputBridge
+from .qq.napcat import NapCatHttpActionCaller, NapCatImageMaterializer, NapCatVisualInputBridge
 from .qq.assembly import QQAgentConfigError, assemble_qq_agent, load_qq_agent_config
 from .qq.turns import NapCatTurnDispatcher
 from .qq.welcome import GroupWelcomePolicy
@@ -123,7 +124,14 @@ def _cmd_doctor() -> int:
     return 0
 
 
-def _cmd_serve(service: str) -> int:
+def _cmd_serve(service: str, *, agent_bindings=None) -> int:
+    # A trusted launcher's context owns injected clients through server exit,
+    # including assembly errors. Ordinary CLI launches never invoke a factory.
+    with ExitStack() as resources:
+        return _serve_backend(service, resources, agent_bindings=agent_bindings)
+
+
+def _serve_backend(service: str, resources: ExitStack, *, agent_bindings=None) -> int:
     settings = load_settings()
     ensure_directories(settings)
 
@@ -186,6 +194,9 @@ def _cmd_serve(service: str) -> int:
             file=sys.stderr,
         )
         return 2
+    if agent_bindings is not None and (not callable(agent_bindings) or not agent_config.enabled):
+        print("invalid enabled QQ Agent configuration: host_bindings_require_enabled_agent", file=sys.stderr)
+        return 2
     napcat_host = None
     assembly = None
     if napcat_config.webhook_enabled:
@@ -193,10 +204,29 @@ def _cmd_serve(service: str) -> int:
         if errors:
             print("invalid enabled NapCat configuration: " + ",".join(errors), file=sys.stderr)
             return 2
+        assembly_options = {}
+        if agent_bindings is not None:
+            from .qq.host_bindings import QQAgentHostBindings
+
+            try:
+                bindings = resources.enter_context(agent_bindings(agent_config))
+                if not isinstance(bindings, QQAgentHostBindings):
+                    raise TypeError("host_bindings_required")
+                assembly_options = bindings.assembly_options()
+            except Exception:
+                # A provider constructor may include its URL/key in an error.
+                # Do not print arbitrary factory exception messages or fall back.
+                print("invalid enabled QQ Agent configuration: host_bindings_invalid", file=sys.stderr)
+                return 2
+        # CLI显式绑定只读缓存接口；构造caller不联网，图片URL正常时不调用get_image。
+        # Docker路径只按受保护配置映射，不能由模型/图片消息指定宿主目录。
+        image_caller = NapCatHttpActionCaller(napcat_config.base_url,
+            access_token=napcat_config.token_value(), timeout=napcat_config.timeout)
         napcat_host = NapCatHost.from_config(
             napcat_config,
             visual_bridge=NapCatVisualInputBridge(
-                materialize=NapCatImageMaterializer(allowed_roots=napcat_config.image_roots)
+                materialize=NapCatImageMaterializer(allowed_roots=napcat_config.image_roots,
+                    path_mappings=napcat_config.image_path_mappings, media_loader=image_caller.get_image)
             ),
             # Welcome is an external side effect. It is available only when
             # the QQ Agent is explicitly allowed to send; dry-run never sends.
@@ -208,16 +238,23 @@ def _cmd_serve(service: str) -> int:
         )
         if agent_config.enabled:
             try:
+                from .qq.file_inputs import QQTextFileReader
                 sender = napcat_host.send if agent_config.send_enabled else None
                 assembly = assemble_qq_agent(
                     agent_config,
+                    **assembly_options,
                     sender=sender,
+                    # 本账号缓存范围由宿主配置；收到的文件作为输入，不扩大群成员工具权限。
+                    file_reader=QQTextFileReader(image_caller.get_file,
+                        path_mappings=napcat_config.file_path_mappings, allowed_roots=napcat_config.file_roots,
+                        message_fetcher=image_caller.get_file_message),
                     group_delivery_observer=lambda group_id, recipients, ids, autonomous, sent_at: (
                         napcat_host.ingress.note_group_reply(
                             group_id, recipient_ids=recipients, message_ids=ids,
                             autonomous=autonomous, at=sent_at,
                         )
                     ),
+                    group_continuation_observer=napcat_host.ingress.note_group_continuation,
                 )
                 model_service_controller.attach_runtime(assembly.bridge.runtime)
             except (QQAgentConfigError, ValueError) as exc:
@@ -245,6 +282,9 @@ def _cmd_serve(service: str) -> int:
         napcat_config=napcat_config,
         model_services_controller=model_service_controller,
     )
+    # 后端接力入口必须来自显式宿主绑定，不能由事件、网页或模型动态安装。
+    if assembly is not None and agent_bindings is not None and bindings.backend_setup is not None:
+        app.include_router(resources.enter_context(bindings.backend_setup(assembly)))
     uvicorn.run(
         app,
         host=settings.binds[service],
@@ -298,15 +338,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, agent_bindings=None) -> int:
+    """Run the CLI; a trusted backend launcher may inject a binding context.
+
+    ``agent_bindings(finalized_config)`` must return a context manager yielding
+    QQAgentHostBindings. It is intentionally unavailable as an argument/env
+    module path, and cannot be silently lost across supervisor subprocesses.
+    """
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if agent_bindings is not None and (args.command != "serve" or args.service != "backend"):
+        print("host_bindings_require_backend_serve", file=sys.stderr)
+        return 2
     load_project_env()
 
     if args.command == "doctor":
         return _cmd_doctor()
     if args.command == "serve":
-        return _cmd_serve(args.service)
+        return _cmd_serve(args.service, agent_bindings=agent_bindings) if agent_bindings is not None else _cmd_serve(args.service)
     if args.command == "supervise":
         return _cmd_supervise(
             args.service,

@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, Callable
+
+from .self_state_receipts import StateObservationStore
 
 __all__ = ["SelfStateTool"]
 
@@ -22,6 +25,7 @@ class SelfStateTool:
     agent_progress_class = "observe"
     agent_permission_class = "read"
     agent_fast_perception = True
+    agent_self_state_answer_source = True
     _SCOPES = frozenset({"all", "runtime", "agent", "tools", "persona", "config", "changes"})
 
     def __init__(
@@ -32,6 +36,7 @@ class SelfStateTool:
     ) -> None:
         self.provider = provider
         self.fresh_provider = fresh_provider
+        self._observations = StateObservationStore()
 
     def tool_metadata(self) -> SimpleNamespace:
         return SimpleNamespace(
@@ -72,56 +77,92 @@ class SelfStateTool:
             raise ValueError("read_self_state_arguments_invalid")
         # 显式自查允许刷新代码/MCP 快照；普通回合使用的 context 快照不会因此
         # 每轮重新扫描整个项目。
-        snapshot = self._snapshot(context, fresh=True)
+        snapshot, source = self._read_snapshot(context, fresh=True)
         scope = arguments["scope"]
         selected = snapshot if scope == "all" else {scope: snapshot.get(scope, {})}
+        gaps = []
+        if scope != "all" and (scope not in snapshot or not snapshot[scope]):
+            gaps.append("selected_scope_missing")
+        selected = _safe_copy(selected, gaps=gaps)
         rendered = json.dumps(selected, ensure_ascii=False, indent=2, sort_keys=True)
         # Keep an unexpectedly verbose provider from destroying the prompt budget.
+        if len(rendered) > 8000:
+            gaps.append("render_limit")
         rendered = rendered[:8000]
+        updates = self._observations.record(snapshot=selected, scope=scope,
+            source=source, gaps=gaps, context=context)
         return {
             "tool_type": self.tool_type,
             "followup_context": "当前实例的只读状态如下：\n" + rendered,
-            "state_updates": {"self_state": selected},
+            "state_updates": updates,
         }
 
+    def resolve_state_observation(self, *, updates, arguments, context):
+        return self._observations.resolve(updates=updates, arguments=arguments, context=context)
+
     def _snapshot(self, context: Any, *, fresh: bool = False) -> dict[str, Any]:
-        if fresh and self.fresh_provider is not None:
+        return _safe_copy(self._read_snapshot(context, fresh=fresh)[0])
+
+    def _read_snapshot(self, context: Any, *, fresh: bool = False):
+        # A fresh read uses the provider before a cached context. A refresh
+        # failure is not permission to silently certify the old context.
+        provider = (self.fresh_provider or self.provider) if fresh else None
+        if provider is not None:
             try:
-                provided = self.fresh_provider()
+                provided = provider()
             except Exception:
-                provided = {}
+                return {"status": "unavailable", "reason": "self_state_provider_failed"}, "unavailable"
             if isinstance(provided, Mapping):
-                return _safe_copy(provided)
+                return dict(provided), "fresh_provider" if self.fresh_provider is not None else "provider"
+            return {"status": "unavailable", "reason": "self_state_provider_invalid"}, "unavailable"
         raw = context.get("self_state") if isinstance(context, Mapping) else None
         if isinstance(raw, Mapping):
-            return _safe_copy(raw)
+            return dict(raw), "context_snapshot"
         if self.provider is not None:
             try:
                 provided = self.provider()
             except Exception:
                 provided = {}
             if isinstance(provided, Mapping):
-                return _safe_copy(provided)
-        return {"status": "unavailable", "reason": "self_state_provider_unconfigured"}
+                return dict(provided), "provider"
+        return {"status": "unavailable", "reason": "self_state_provider_unconfigured"}, "unavailable"
 
 
-def _safe_copy(value: Any, *, depth: int = 0) -> Any:
+def _safe_copy(value: Any, *, depth: int = 0, gaps=None) -> Any:
     """Copy JSON-like values while dropping obvious secret-shaped keys."""
 
     if depth > 5:
+        if gaps is not None:
+            gaps.append("depth_limit")
         return "<truncated>"
     if isinstance(value, Mapping):
         result: dict[str, Any] = {}
-        for key, item in value.items():
+        if len(value) > 100 and gaps is not None:
+            gaps.append("mapping_limit")
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 100:
+                break
             name = str(key)
             lowered = name.casefold()
             if any(marker in lowered for marker in ("key", "token", "secret", "password", "authorization")):
                 result[name] = "<redacted>"
             else:
-                result[name] = _safe_copy(item, depth=depth + 1)
+                result[name] = _safe_copy(item, depth=depth + 1, gaps=gaps)
         return result
     if isinstance(value, (list, tuple)):
-        return [_safe_copy(item, depth=depth + 1) for item in value[:100]]
+        if len(value) > 100 and gaps is not None:
+            gaps.append("list_limit")
+        return [_safe_copy(item, depth=depth + 1, gaps=gaps) for item in value[:100]]
+    if isinstance(value, float) and not math.isfinite(value):
+        if gaps is not None:
+            gaps.append("invalid_number")
+        return "<unavailable>"
+    if isinstance(value, str) and len(value) > 8000:
+        if gaps is not None:
+            gaps.append("text_limit")
+        return value[:8000]
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
-    return str(value)
+    if gaps is not None:
+        gaps.append("unsupported_value")
+    return "<unavailable>"

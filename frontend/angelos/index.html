@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Angelos 独立 Agent 工作台 · 会话与工作区独立 Agent">
+<link rel="icon" href="data:,">
+<title>Angelos / 工作台</title>
+<link rel="stylesheet" href="/angelos/assets/app.css">
+<script defer src="/angelos/assets/editor.js"></script>
+<script defer src="/angelos/assets/usage.js"></script>
+<script defer src="/angelos/assets/activity.js"></script>
+<script defer src="/angelos/assets/log-view.js"></script>
+<script defer src="/angelos/assets/sessions.js"></script>
+<script defer src="/angelos/assets/app.js"></script>
+<script defer src="/angelos/assets/layout.js"></script>
+<script defer src="/angelos/assets/context.js"></script>
+<script defer src="/angelos/assets/workspace.js"></script>
+</head>
+<body class="workbench-shell">
+<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><defs>
+<symbol id="i-plus" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></symbol>
+<symbol id="i-folder" viewBox="0 0 16 16"><path d="M1 4V2h5l2 2h7v10H1zM1 6h14"/></symbol>
+<symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10M9 4l4 4-4 4"/></symbol>
+<symbol id="i-attach" viewBox="0 0 16 16"><path d="m6 9 4-4a2 2 0 0 1 3 3l-6 6a3.5 3.5 0 0 1-5-5l7-7M4 11l6-6"/></symbol>
+<symbol id="i-edit" viewBox="0 0 16 16"><path d="m3 10 8-8 3 3-8 8-4 1zM9 4l3 3"/></symbol>
+<symbol id="i-menu" viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></symbol>
+</defs></svg>
+<button class="drawer-scrim" id="drawer-scrim" aria-label="关闭会话列表" tabindex="-1"></button>
+<aside class="sidebar" id="sidebar" aria-label="工作区和会话">
+  <div class="brand"><span class="wordmark">ANGELOS</span><span class="eyebrow">PERSONAL<br>WORKBENCH</span></div>
+  <div class="workspace-switcher"><div class="workspace-switcher-heading"><label for="workspace-select">工作区</label><button id="manage-workspaces" title="管理工作区">管理</button><button id="quick-create-workspace" title="创建工作区" aria-label="创建工作区">＋</button></div><select id="workspace-select" aria-label="切换工作区"></select><span id="sidebar-workspace" hidden></span><small id="sidebar-path" class="mono"></small><div id="workspace-instructions" class="instructions-status" role="status">等待工作区</div></div>
+  <button class="new-conversation primary button-icon" id="new-conversation"><svg class="icon"><use href="#i-plus"/></svg>新对话<span class="new-target" id="new-target"></span></button>
+  <div class="search-wrap"><svg class="icon"><use href="#i-search"/></svg><input type="search" id="conversation-search" aria-label="搜索会话" placeholder="搜索当前工作区的会话"></div>
+  <section id="running-sessions" aria-label="运行中的会话"><div class="conversations-heading"><span>运行中 · 全部工作区</span><span id="running-count"></span></div><nav id="running-list" aria-label="运行中的会话列表"></nav></section>
+  <section id="waiting-sessions" aria-label="等待主管"><div class="conversations-heading"><span>等待主管 · 全部工作区</span><span id="waiting-count"></span></div><nav id="waiting-list" aria-label="等待回答的会话列表"></nav></section>
+  <div class="conversations-heading"><span>当前工作区的会话</span><span class="mono" id="conversation-count"></span></div>
+  <nav class="conversation-list" id="conversation-list" aria-label="会话列表"></nav>
+  <div class="sidebar-footer"><div class="top"><span><span class="dot blue"></span>本地工作台</span><span class="label">独立 Agent</span></div></div>
+</aside>
+<header class="topbar">
+  <button class="mobile-button icon-button" id="sidebar-toggle" aria-label="打开会话列表" aria-expanded="false" aria-controls="sidebar"><svg class="icon"><use href="#i-menu"/></svg></button>
+  <div class="header-title"><div><strong id="header-title">新会话</strong><small id="header-workspace"></small><select id="header-workspace-select" aria-label="切换工作区（顶栏）"></select></div><button class="icon-button" id="rename-conversation" aria-label="重命名会话" hidden><svg class="icon"><use href="#i-edit"/></svg></button></div>
+  <div class="work-mode" role="group" aria-label="工作视图"><button id="view-chat" aria-pressed="true">对话</button><button id="view-code" aria-pressed="false">编程</button></div>
+  <div class="header-tools"><button id="command-button" title="快捷操作（Ctrl / ⌘ + K）" aria-controls="command-dialog">快捷操作 <kbd>Ctrl K</kbd></button><button class="mobile-button" id="mobile-new" aria-label="新建对话">＋ 新对话</button><button id="context-button" class="context-button">会话资料</button><button id="tools-button" aria-expanded="false" aria-controls="tools-panel">工具调用 <span id="tools-count">0</span></button><button id="changes-button" aria-expanded="false" aria-controls="changes-panel">文件改动 <span id="changes-count">0</span></button><button id="task-notices-button" aria-controls="task-notices-dialog">任务提醒 <span id="task-notices-count">0</span></button><button id="settings-button">设置</button></div>
+</header>
+<main class="stage is-empty" id="stage">
+  <div class="conversation-scroll" id="conversation-scroll" tabindex="0" aria-label="当前会话内容">
+    <div class="empty-intro" id="empty-intro"><div class="eyebrow">ANGELOS / NEW CONVERSATION</div><h1>开始新的一天</h1><p>我们开始工作吧，主管</p></div>
+    <div class="chat-document" id="chat-document" hidden><div class="thread-heading"><div><h1 id="conversation-title"></h1><p id="conversation-caption"></p></div><span class="status-text" id="conversation-status"></span></div><div id="messages" aria-live="polite" aria-relevant="additions"></div></div>
+  </div>
+  <div class="composer-shell">
+    <div id="tool-approvals" aria-live="polite"></div>
+    <div class="session-model-bar" aria-label="当前会话模型设置"><span>本会话</span><select id="provider-select" aria-label="当前会话供应商"></select><select id="model-select" aria-label="当前会话模型"><option>正在连接…</option></select><select id="effort-select" aria-label="思考档位"><option>默认</option></select><button id="session-model-settings" type="button">模型设置</button></div>
+    <p id="session-model-status" class="session-model-status" role="status" aria-live="polite" hidden></p>
+    <form class="composer" id="composer">
+      <textarea id="message-input" aria-label="发送给 Angelos 的消息" placeholder="给 Angelos 一个任务，或从一个问题开始…" rows="1" maxlength="12000"></textarea>
+      <div class="pending-files" id="pending-files"></div>
+      <div class="composer-actions"><button class="text-button button-icon" type="button" id="attach-file"><svg class="icon"><use href="#i-attach"/></svg>附件</button><button type="button" class="composer-workspace button-icon" data-workspace aria-label="切换当前工作区"><svg class="icon" style="width:13px;height:13px"><use href="#i-folder"/></svg><span id="composer-workspace"></span></button><span class="composer-hint" id="composer-hint">Enter 发送 / Shift + Enter 换行</span><button class="primary button-icon" id="send-message" disabled>发送<svg class="icon"><use href="#i-arrow"/></svg></button><button type="button" class="primary" id="stop-response" hidden>停止</button></div>
+    </form>
+    <div id="connection-error" role="alert" hidden></div>
+    <div id="empty-workspace"><div class="new-workspace-line"><div class="directory"><svg class="icon muted"><use href="#i-folder"/></svg><div><strong id="empty-workspace-name"></strong><small class="mono" id="empty-workspace-path"></small></div></div><button class="text-button" data-workspace>更换工作区 ↗</button></div></div>
+  </div>
+</main>
+<footer class="composer-foot workbench-statusbar" aria-label="工作台状态"><span id="status-workspace" class="mono"></span><span id="composer-scope" hidden>新会话 · 独立上下文</span><div id="usage-panel" class="usage-status" aria-label="上下文和会话用量" aria-live="off"><span id="usage-context">上下文未知</span><span id="usage-session-hit"></span><button type="button" id="usage-instance-hit" title="查看整个 Angelos 的累计用量">累计命中待采样</button><button type="button" id="usage-open" popovertarget="usage-popover" aria-label="查看用量统计">用量 ↗</button></div><label class="permission-control">权限 <select id="permission-select" aria-label="Angelos 工具权限" disabled><option>正在连接…</option></select></label></footer>
+<aside id="tools-panel" class="tools-panel" aria-label="工具调用" hidden>
+  <div class="tools-heading"><strong>任务详情 · 工具调用</strong><button id="tools-close" aria-label="关闭工具栏">×</button></div>
+  <nav class="detail-tabs" aria-label="任务详情视图"><button type="button" data-detail-tab="files">文件改动</button><button type="button" data-detail-tab="tools" aria-current="page">工具调用</button></nav>
+  <label class="tools-selector">查看轮次<select id="tools-turn" aria-label="工具调用所属轮次"></select></label>
+  <p id="tools-note" role="status">选择一轮对话查看工具调用。</p><div id="tool-calls" class="tool-calls"></div>
+</aside>
+<aside id="log-panel" class="log-panel" aria-label="执行日志" hidden>
+  <div class="log-heading"><strong id="log-title">执行日志</strong><span id="log-count" class="log-count"></span><button id="log-close" aria-label="关闭日志面板">×</button></div>
+  <div class="log-toolbar">
+    <label class="log-follow-label"><input type="checkbox" id="log-follow" checked>跟随最新输出</label>
+    <select id="log-stream" aria-label="选择输出流"></select>
+    <input id="log-search" placeholder="在本次调用的日志中搜索" aria-label="日志内搜索">
+    <button type="button" id="log-search-button">搜索</button>
+    <button type="button" id="log-copy">复制</button>
+    <button type="button" id="log-export">导出全部</button>
+  </div>
+  <p id="log-status" role="status"></p><div id="log-search-result" hidden></div>
+  <div id="log-body" class="log-body" tabindex="0"></div>
+  <button type="button" id="log-more" class="log-more" hidden>加载更多已采集行</button>
+  <button type="button" id="log-new" class="log-new" hidden></button>
+  <button type="button" id="log-jump" class="log-jump" hidden>回到底部 ↓</button>
+</aside>
+<aside id="changes-panel" class="changes-panel" aria-label="工作区文件改动" hidden>
+  <div class="changes-heading"><strong>任务详情 · 编程工作区</strong><span id="changes-totals"></span><button id="changes-refresh">刷新</button><button id="changes-close" aria-label="返回对话视图">×</button></div>
+  <nav class="detail-tabs" aria-label="任务详情视图"><button type="button" data-detail-tab="files" aria-current="page">文件改动</button><button type="button" data-detail-tab="tools">工具调用</button></nav>
+  <p id="changes-note" role="status">等待工作区</p><div id="changed-files" aria-label="改动文件列表"></div>
+  <form id="open-code-form"><input id="open-code-path" placeholder="相对路径或绝对路径，例如 /home/user/project/main.py" aria-label="打开工作区文件路径" title="支持当前工作区内的相对路径或绝对路径"><button>打开文件</button><button type="button" id="browse-code">选择文件…</button><button type="button" data-workspace>工作区</button></form>
+  <div class="code-location-bar"><span id="code-location" class="mono">尚未打开文件</span><button type="button" id="copy-code-path" disabled title="复制当前文件完整路径">复制路径</button></div>
+  <div class="code-toolbar"><strong id="code-path">选择文件查看</strong><select id="code-mode" aria-label="代码查看模式" disabled><option value="read">只读</option><option value="edit">编辑</option></select><label><input id="code-diff" type="checkbox" checked>差异</label><button id="code-reload" disabled>重新读取</button><button id="code-save" class="primary" disabled>保存</button></div>
+  <p id="code-status" role="status">差异视图左侧为原文件，右侧为当前文件。</p><div id="code-editor"></div>
+  <div class="code-question"><span id="code-selection-note" role="status">选中代码后，可以带着文件位置提问。</span><button id="ask-code" disabled>询问选中代码</button><button id="ask-code-new" disabled>在新会话提问</button></div>
+</aside>
+<dialog id="discard-code-dialog"><div class="dialog-header"><h2>保留未保存的编辑？</h2></div><div class="dialog-body">当前编辑尚未保存。继续会放弃此处草稿，磁盘文件保持原样。</div><div class="dialog-footer"><button id="discard-code-cancel">继续编辑</button><button id="discard-code-confirm">放弃草稿并继续</button></div></dialog>
+<input type="file" id="file-picker" accept=".txt,.md,.csv,.json,.log,.py,.js,.html,.css,.yaml,.yml,.xml" multiple hidden>
+<dialog id="workspace-dialog" aria-labelledby="workspace-title">
+  <div class="dialog-header"><h2 id="workspace-title">工作区管理</h2><button class="dialog-close" data-close aria-label="关闭工作区">×</button></div>
+  <div class="dialog-body"><p class="dialog-note">每个工作区有独立的会话列表、目录和工作说明。切换时保留各自的草稿。</p><input type="search" id="workspace-search" aria-label="搜索工作区" placeholder="搜索名称或目录"><div class="workspace-options" id="workspace-options"></div><div class="workspace-create-entry"><button id="show-create-workspace" class="button-icon"><svg class="icon"><use href="#i-plus"/></svg>创建工作区</button><button class="text-button" id="edit-workspace">编辑当前工作区</button></div>
+    <form id="workspace-form" class="workspace-form" hidden><div class="form-heading"><h3 id="workspace-form-title">新工作区</h3><button type="button" class="text-button" id="hide-workspace-form">收起</button></div><label class="field"><span>工作区名称</span><input id="workspace-name" placeholder="例如：网站项目" required maxlength="60"></label><label class="field"><span>本地目录</span><input id="workspace-path" class="mono" placeholder="例如：/home/user/projects/website" maxlength="500"><button type="button" id="browse-workspace">浏览目录…</button><small id="workspace-picker-status" role="status"></small><small>可留空；目录须在本机存在。工具访问仍遵守已有权限。</small></label><label class="field"><span>工作区说明</span><textarea id="workspace-description" rows="2" placeholder="这个工作区主要做什么，有哪些固定要求…" maxlength="2000"></textarea></label><p id="workspace-error" class="inline-error" hidden></p><div class="form-actions"><button type="button" id="cancel-workspace-form">取消</button><button class="primary" id="save-workspace">创建并进入</button></div></form>
+  </div><div class="dialog-footer"><small>工作区与会话保存在本机</small><button data-close>完成</button></div>
+</dialog>
+<dialog id="workspace-delete-dialog" aria-labelledby="workspace-delete-title">
+  <div class="dialog-header"><h2 id="workspace-delete-title">删除工作区</h2></div>
+  <div class="dialog-body"><p>删除「<strong id="workspace-delete-name"></strong>」？</p><p class="dialog-note" id="workspace-delete-note"></p><p class="dialog-note">只移除工作区登记，不删除磁盘上的目录和文件。历史任务、附件和执行记录保留。</p><p id="workspace-delete-error" class="inline-error" role="alert" hidden></p></div>
+  <div class="dialog-footer"><button id="cancel-workspace-delete">取消</button><button id="confirm-workspace-delete" class="workspace-delete">确认删除</button></div>
+</dialog>
+<dialog id="context-dialog" class="context-dialog" aria-labelledby="context-title"><div class="dialog-header"><h2 id="context-title">会话资料</h2><button class="dialog-close" data-close aria-label="关闭会话资料">×</button></div><div class="dialog-body"><section class="context-section"><h3>工作区<button class="text-button" id="context-workspace">管理 ↗</button></h3><p id="context-workspace-name"></p><p id="context-path" class="mono" style="margin-top:5px"></p><p id="context-description" style="margin-top:10px"></p></section><section class="context-section"><h3>参考资料<button class="text-button" id="context-attach">添加文件 ＋</button></h3><div id="context-resources"></div></section><section class="context-section"><h3>会话产物</h3><div id="context-artifacts"></div></section><section class="context-section"><h3>执行记录<button class="text-button" id="task-control" hidden>取消任务</button></h3><div id="context-records"></div></section><section class="context-section"><h3>会话名称<button class="text-button" id="context-rename">重命名</button></h3><p id="context-conversation-name"></p></section></div></dialog>
+<div id="usage-popover" popover="auto" role="dialog" aria-labelledby="usage-title">
+  <div class="usage-popover-heading"><strong id="usage-title">用量统计</strong><button popovertarget="usage-popover" popovertargetaction="hide" aria-label="关闭用量统计">×</button></div>
+  <div class="usage-ranges" role="group" aria-label="统计范围"><button data-usage-scope="turn" aria-pressed="false">本轮</button><button data-usage-scope="session" aria-pressed="true">当前会话</button><button data-usage-scope="instance" aria-pressed="false">整个 Angelos</button></div>
+  <div class="usage-popover-body"><div id="usage-summary"></div><details id="usage-details"><summary>高级详情</summary><div id="usage-advanced"></div></details></div>
+</div>
+<dialog id="settings-dialog" aria-labelledby="settings-title"><form id="settings-form"><div class="dialog-header"><h2 id="settings-title">工作台设置</h2><button type="button" class="dialog-close" data-close aria-label="关闭设置">×</button></div><div class="dialog-body"><p class="dialog-note">模型设置仅影响当前会话；该会话运行时不能修改，其他会话不受影响。窗口容量按供应商与模型共用。阅读设置保存在当前浏览器。</p><label class="field"><span>模型供应商</span><select id="settings-provider" aria-label="模型供应商"></select></label><label class="field"><span>当前会话模型</span><select id="settings-model" aria-label="设置 当前会话模型"></select></label><label class="field"><span>思考档位</span><select id="settings-effort" aria-label="设置思考档位"></select><small id="model-capability-note"></small></label><div class="model-actions"><button type="button" id="refresh-models">刷新供应商模型列表</button><button type="button" id="apply-model" class="primary">应用模型设置</button></div><p id="model-setting-status" role="status" class="dialog-note"></p><label class="field"><span>上下文窗口（token）</span><input id="model-context-window" type="number" min="1" max="2000000" step="1" placeholder="留空使用自动识别" aria-label="模型上下文窗口"><small id="model-context-source"></small></label><div class="model-actions"><button type="button" id="save-context-window">保存窗口容量</button></div><p id="model-context-status" role="status" class="dialog-note"></p><label class="setting-row"><div><h3>阅读字号</h3><p>调整正文、输入框与界面文字</p></div><select id="reading-size" aria-label="阅读字号"><option value="standard">标准 · 16px</option><option value="large">大字号 · 18px</option></select></label><label class="setting-row"><div><h3>发送方式</h3><p>换行始终可用 Shift + Enter</p></div><select id="send-mode" aria-label="发送方式"><option value="enter">Enter 发送</option><option value="modifier">Ctrl / ⌘ + Enter</option></select></label><label class="setting-row"><div><h3>紧凑显示</h3><p>缩小会话列表和消息间距</p></div><input id="compact-setting" type="checkbox"></label><label class="setting-row"><div><h3>展开执行详情</h3><p>默认展开真实执行记录</p></div><input id="details-setting" type="checkbox"></label></div><div class="dialog-footer"><small>深黑背景 · 蓝色 · 直角</small><button class="primary">应用设置</button></div></form></dialog>
+<dialog id="rename-dialog" aria-labelledby="rename-title"><form id="rename-form"><div class="dialog-header"><h2 id="rename-title">重命名会话</h2><button type="button" class="dialog-close" data-close aria-label="关闭重命名">×</button></div><div class="dialog-body"><label class="field"><span>会话名称</span><input id="rename-input" required maxlength="80"></label></div><div class="dialog-footer"><button type="button" data-close>取消</button><button class="primary">保存名称</button></div></form></dialog>
+<dialog id="preview-dialog" class="wide" aria-labelledby="preview-title"><div class="dialog-header"><h2 id="preview-title"></h2><button class="dialog-close" data-close aria-label="关闭预览">×</button></div><div class="dialog-body"><p class="dialog-note" id="preview-note"></p><pre class="preview-content" id="preview-content"></pre></div><div class="dialog-footer"><small>来自当前任务的实际产物</small><button data-close>关闭</button><button class="primary" id="download-preview">下载文件</button></div></dialog>
+<dialog id="cancel-dialog" aria-labelledby="cancel-title"><form id="cancel-form"><div class="dialog-header"><h2 id="cancel-title">取消当前任务</h2><button type="button" class="dialog-close" data-close aria-label="关闭取消确认">×</button></div><div class="dialog-body"><p>取消后保留当前会话、执行记录和已有产物。已完成的操作不会自动撤销。</p><p class="dialog-note" style="margin:12px 0 0">只有执行器确认后才显示已停止。</p></div><div class="dialog-footer"><button type="button" data-close>继续查看</button><button class="primary">确认取消</button></div></form></dialog>
+<dialog id="conversation-delete-dialog" aria-labelledby="conversation-delete-title"><div class="dialog-header"><h2 id="conversation-delete-title">删除会话</h2></div><div class="dialog-body"><p>删除「<strong id="conversation-delete-name"></strong>」？</p><p>会话正文、附件和关联记忆将移除。工作区和项目文件保留；任务审计与累计用量独立保留。运行中的会话须先停止任务。</p><p id="conversation-delete-error" class="inline-error" hidden></p></div><div class="dialog-footer"><button id="cancel-conversation-delete">取消</button><button id="confirm-conversation-delete">确认删除</button></div></dialog>
+<dialog id="task-notices-dialog" aria-labelledby="task-notices-title"><div class="dialog-header"><h2 id="task-notices-title">任务提醒</h2><button data-close aria-label="关闭任务提醒">×</button></div><div class="dialog-body"><div id="task-notices-list"></div></div><div class="dialog-footer"><button id="clear-task-notices">全部标为已读</button></div></dialog>
+<div id="task-live-notice" role="status" aria-live="polite" hidden></div>
+<dialog id="command-dialog" aria-labelledby="command-title"><div class="dialog-header"><h2 id="command-title">快捷操作</h2><button type="button" data-close aria-label="关闭快捷操作">Esc</button></div><input id="command-search" type="search" autocomplete="off" placeholder="搜索操作或会话…" aria-label="搜索操作或会话"><div id="command-results"></div><div class="dialog-footer"><small>↑ ↓ 选择 · Enter 打开 · Esc 返回</small></div></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

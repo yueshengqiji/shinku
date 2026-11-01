@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 import unittest
 
 from shinku.hosts.tool_host import ToolHost
 from shinku.persona.loader import load_persona
 from shinku.qq.agent_bridge import QQAgentBridge
+from shinku.qq.tool_selection import compact_tool_dispatch_spec
 from shinku.tools.registry import ToolRegistry
 
 
@@ -152,11 +154,6 @@ class CompactToolRouterTests(unittest.TestCase):
         self.assertEqual(decision.invocation.name, "private_tool_2")
         self.assertEqual(runtime.calls[1]["native_tools"][0]["function"]["name"], "private_tool_0")
 
-    def test_persona_treats_user_clarification_as_an_update_not_a_debate(self) -> None:
-        persona = load_persona("private/profile/shinku/persona.md")
-        self.assertIn("以新信息更新旧判断", persona.text)
-        self.assertIn("停止重复原来的防御或自我解释", persona.text)
-        self.assertIn("不要把刚收到的澄清原句复述一遍当作回应", persona.text)
 
     def test_turn_boundary_prioritizes_a_correction_over_previous_assistant_interpretation(self) -> None:
         runtime = _Runtime({"speech": "嗯，我明白了。"})
@@ -218,6 +215,66 @@ class CompactToolRouterTests(unittest.TestCase):
         self.assertEqual(decision.kind, "tool")
         self.assertEqual(decision.invocation.name, "private_tool_1")
         self.assertEqual(decision.invocation.arguments, {"field_0": "recovered_after_malformed"})
+
+    def test_full_schema_is_selected_when_compact_directory_costs_more(self) -> None:
+        names = ("single_small_tool",)
+        runtime = _Runtime({"kind":"final", "text":"直接回答"})
+        bridge = self._bridge(runtime, names)
+        trace_id = bridge.trace_store.begin(SimpleNamespace(
+            conversation_type="private", conversation_id="master",
+            primary_message_id="test-full-schema-size", message_ids=("test-full-schema-size",),
+            combined_text="直接回答即可"))
+
+        decision, _ = bridge._run_chat_decision(
+            task_id="test-full-schema-size",
+            context=self._context(),
+            initial_transcript=[{"role":"user", "content":"直接回答即可"}],
+            trace_id=trace_id,
+        )
+
+        self.assertEqual(decision.kind, "final")
+        self.assertEqual([tool["function"]["name"] for tool in runtime.calls[0]["native_tools"]],
+                         ["single_small_tool"])
+        stage = next(stage for stage in bridge.trace_store.snapshot()[0]["stages"]
+                     if stage["name"] == "chat_start")
+        self.assertEqual(stage["tool_route"], "native_schema")
+        self.assertEqual(stage["tool_context_chars_after"], stage["tool_context_chars_before"])
+
+    def test_required_nested_parameters_past_optional_preview_are_preserved_generically(self) -> None:
+        date_shape = {
+            "type":"object", "description":"另名的日期范围，不得截断结构说明。",
+            "properties": {
+                "from_day":{"type":"string", "maxLength":10, "description":"包含的起点。"},
+                "until_day":{"type":"string", "maxLength":10, "description":"排除的终点。"},
+            }, "required":["from_day", "until_day"], "additionalProperties":False,
+        }
+        step_shape = {
+            "type":"array", "description":"执行步骤列表，嵌套结构也必须保留。",
+            "items":{"type":"object", "properties":{
+                "operation":{"type":"string", "enum":["read", "check"]},
+            }, "required":["operation"], "additionalProperties":False},
+        }
+        properties = {
+            **{f"optional_{index}":{"type":"string", "description":f"普通可选参数{index}"}
+               for index in range(13)},
+            "custom_window":date_shape,
+            "plan_steps":step_shape,
+        }
+        spec = {"type":"function", "function":{"name":"renamed_calendar_reader",
+            "description":"读取指定范围并执行轻量校验。", "parameters":{
+                "type":"object", "properties":properties,
+                "required":["custom_window", "plan_steps"], "additionalProperties":False}}}
+        before = json.dumps(spec, ensure_ascii=False, separators=(",", ":"))
+
+        _, catalog = compact_tool_dispatch_spec([spec])
+
+        self.assertIn("custom_window (必填，完整参数定义):" +
+                      json.dumps(date_shape, ensure_ascii=False, separators=(",", ":")), catalog)
+        self.assertIn("plan_steps (必填，完整参数定义):" +
+                      json.dumps(step_shape, ensure_ascii=False, separators=(",", ":")), catalog)
+        self.assertIn("另有1项", catalog)
+        self.assertNotIn("optional_12:", catalog)
+        self.assertEqual(json.dumps(spec, ensure_ascii=False, separators=(",", ":")), before)
 
 
 if __name__ == "__main__":

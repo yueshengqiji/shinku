@@ -15,7 +15,7 @@ if str(_REPO_ROOT) not in sys.path:
 from scripts.build_shinku_release_manifest import (
     FORBIDDEN_NAMES,
     MEDIA_SUFFIXES,
-    _files_under,
+    iter_release_files,
 )
 
 
@@ -26,34 +26,20 @@ def build_bundle(root: str | Path, output: str | Path) -> dict[str, object]:
     entries: list[str] = []
     findings: list[str] = []
 
-    roots = (
-        "src",
-        "scripts",
-        "tests",
-        "docs",
-        "README.md",
-        "LICENSE",
-        "NOTICE",
-        "pyproject.toml",
-        "requirements-cleanenv.lock",
-        "requirements-build.lock",
-        ".env.example",
-        ".gitignore",
-    )
+    # 与清单/预检共享未筛选候选，避免遗漏前端/构建文件或悄悄纳入运行证据。
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for relative_root in roots:
-            for path in _files_under(repo, relative_root):
-                relative = path.relative_to(repo).as_posix()
-                if path.name in FORBIDDEN_NAMES:
-                    findings.append(f"secret_file:{relative}")
-                    continue
-                if path.suffix.lower() in MEDIA_SUFFIXES:
-                    findings.append(f"media_file:{relative}")
-                    continue
-                info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                archive.writestr(info, path.read_bytes())
-                entries.append(relative)
+        for path in iter_release_files(repo):
+            relative = path.relative_to(repo).as_posix()
+            if path.name in FORBIDDEN_NAMES:
+                findings.append(f"secret_file:{relative}")
+                continue
+            if path.suffix.lower() in MEDIA_SUFFIXES:
+                findings.append(f"media_file:{relative}")
+                continue
+            info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, path.read_bytes())
+            entries.append(relative)
 
     return {
         "ok": not findings,

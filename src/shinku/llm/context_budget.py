@@ -119,6 +119,9 @@ def measure_payload(payload: Mapping[str, Any], policy: ContextBudgetPolicy) -> 
     image_count = 0
     for index, message in enumerate(messages):
         cost, images = _content_cost(message.get("content"), policy.image_estimate_tokens)
+        cost += estimate_text_tokens(message.get("reasoning_content"))
+        if message.get("tool_calls"):
+            cost += estimate_text_tokens(json.dumps(message["tool_calls"], ensure_ascii=False, sort_keys=True))
         image_count += images
         image_tokens = images * policy.image_estimate_tokens
         buckets["images"] += image_tokens

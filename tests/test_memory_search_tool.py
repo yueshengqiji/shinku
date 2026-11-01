@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from reply_review_fixture import dialogue_review_result
+
 import tempfile
 import time
 import unittest
@@ -25,6 +27,9 @@ class _NativeRuntime:
 
     def call_chat_json(self, **kwargs):
         self.calls += 1
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         if self.calls == 1:
             return {
                 "_native_tool_call": {
@@ -132,7 +137,7 @@ class MemorySearchToolTests(unittest.TestCase):
             result = bridge.handle_turn(_turn())
             self.assertEqual(result.agent_status, "partial")
             self.assertIn("没找到", result.final_text)
-            self.assertEqual(runtime.calls, 2)
+            self.assertEqual(runtime.calls, 1)
 
     def test_date_recall_uses_a_day_range_and_sees_both_sides_of_chat(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -262,9 +267,10 @@ class MemorySearchToolTests(unittest.TestCase):
     def test_assistant_reply_is_recorded_once_as_history(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             service = self._service(temporary)
-            sent = []
+            sent, calls = [], []
             bridge = QQAgentBridge(
-                runtime=type("Runtime", (), {"call_chat_json": lambda self, **kwargs: {"speech": "真红的完整回复。"}})(),
+                runtime=type("Runtime", (), {"call_chat_json": lambda self, **kwargs:
+                    calls.append(kwargs) or dialogue_review_result(kwargs) or {"speech": "真红的完整回复。"}})(),
                 system_prompt="persona",
                 sender=lambda message: sent.append(message) or DeliveryResult(True, "sent", ("out",)),
                 memory_service=service,
@@ -273,6 +279,9 @@ class MemorySearchToolTests(unittest.TestCase):
             # transport implementation detail in the assertion below.
             result = bridge.handle_turn(_turn())
             self.assertTrue(result.final_text)
+            # 主生成和审核两次调用，只保存实际交付的最终助手正文。
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(result.agent_status, "completed")
             rows = service.store.timeline(
                 scope="private:u-native-memory",
                 limit=20,

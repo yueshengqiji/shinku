@@ -117,6 +117,7 @@ class ToolHost:
         tool_specs_transform: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
         state_observer: Callable[[AgentState, str], None] | None = None,
         interruption_check: Callable[[AgentState], str] | None = None,
+        native_tool_history: bool = False,
         sliced: bool = False,
     ) -> AgentLoop:
         native_supported = self._native_tools_supported(runtime)
@@ -145,11 +146,15 @@ class ToolHost:
             prompt_cache_key=prompt_cache_key,
             temperature=temperature,
             history_limit=history_limit,
+            native_tool_history=native_tool_history,
         )
         effective_gate = completion_gate
         if effective_gate is None:
             tool_capabilities: dict[str, dict[str, tuple[str, ...]]] = {}
             for name, handler in handlers.items():
+                # 内部计划更新没有业务效果，不能被 tool:名称 条件当成执行证明。
+                if getattr(handler, 'agent_execution_evidence', True) is False:
+                    continue
                 effects = getattr(handler, "agent_completion_effects", ())
                 target_arguments = getattr(handler, "agent_completion_target_arguments", ())
                 if isinstance(effects, str):

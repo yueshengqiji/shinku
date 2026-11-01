@@ -99,15 +99,18 @@ def test_literal_filename_parentheses_and_full_path_remain_targets(request_text,
 
 
 def test_honest_failure_ends_loop_without_success_status():
-    result = AgentLoop(planner=lambda **_: AgentDecision.final("失败了，无法继续。"), handlers={},
+    result = AgentLoop(planner=lambda **_: AgentDecision.final("失败了，无法继续。", outcome="failed"), handlers={},
                        completion_gate=SmartCompletionVerifier()).run(initial_transcript=[{"role": "user", "content": "请修好浏览器"}])
     assert (result.status, result.rounds) == ("failed", 1)
     assert result.completion["accepted"] and result.completion["status"] == "failed"
 
 
-def test_completed_label_cannot_override_a_pure_failure_report():
-    verdict = SmartCompletionVerifier().evaluate(state("请修好浏览器"), "失败了，无法继续。", outcome="completed")
-    assert verdict.accepted and verdict.status == "failed"
+def test_completed_label_cannot_override_missing_execution_evidence():
+    # 失败措辞不参与判定；宿主已要求真实执行时，completed 仍不能凭空通过。
+    verifier = SmartCompletionVerifier(require_execution=True)
+    verdict = verifier.evaluate(state("请修好浏览器"), "失败了，无法继续。", outcome="completed")
+    assert not verdict.accepted
+    assert "没有成功执行的工具证据" in verdict.reason
 
 
 @pytest.mark.parametrize("outcome", ["failed", "blocked"])

@@ -56,7 +56,9 @@ def batch(number, *, direct=False, group="g"):
 def test_slow_worker_caps_passive_queue_but_keeps_explicit_call():
     released, started = threading.Event(), threading.Event()
     handled = []
+    running = []
     def handler(turn):
+        running.append(turn)
         started.set()
         assert released.wait(3)
         handled.append(turn)
@@ -67,15 +69,19 @@ def test_slow_worker_caps_passive_queue_but_keeps_explicit_call():
         assert started.wait(1)
         with dispatcher._lock:
             assert dispatcher._dispatch_locked(batch(2)) == 1
-            assert dispatcher._dispatch_locked(batch(3)) == 0
-            assert dispatcher.last_error == "autonomous_queue_full"
+            assert dispatcher._dispatch_locked(batch(3)) == 1
+            assert dispatcher.last_error == "autonomous_queued_turn_coalesced"
+            assert dispatcher._pending_turn_counts[("group", "g")] == 2
             assert dispatcher._dispatch_locked(batch(4, direct=True)) == 1
+            assert running[0].suppression_reason("reply") == "autonomous_turn_superseded"
             assert dispatcher._pending_turn_counts[("group", "g")] == 3
     finally:
         released.set()
         dispatcher.close()
-    assert [t.primary_message_id for t in handled] == ["1", "2", "4"]
-    assert handled[-1].attention_mode == "immediate" and "busy_group" in handled[-1].attention_signals
+    # The explicit call precedes queued ambient work; the running turn is
+    # allowed to finish. LB01 previously asserted the obsolete FIFO contract.
+    assert [t.primary_message_id for t in handled] == ["1", "4", "3"]
+    assert handled[1].attention_mode == "immediate" and "busy_group" in handled[1].attention_signals
     assert not dispatcher._pending_turn_counts
 
 

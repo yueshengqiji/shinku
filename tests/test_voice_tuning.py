@@ -1,7 +1,11 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from shinku.qq.agent_bridge import QQAgentBridge
 
 from shinku.persona.loader import load_persona
 from shinku.qq.chat_flow import ChatFlowController
@@ -59,15 +63,15 @@ class VoiceTuningTests(unittest.TestCase):
         controller = ChatFlowController()
         turn = _make_turn("我刚忙完，今天好累啊")
         decision = controller.begin_turn(turn)
-        self.assertIn("不当照护员", decision.voice_anchor)
-        self.assertIn("两拍接住", decision.voice_anchor)
+        self.assertEqual(decision.voice_anchor, "")
+        self.assertNotIn("两拍", decision.guidance)
 
     def test_chat_flow_detects_debate_anchor(self) -> None:
         controller = ChatFlowController()
         turn = _make_turn("你这根本就是胡说，漏洞在逻辑本身")
         decision = controller.begin_turn(turn)
-        self.assertIn("观点争论", decision.voice_anchor)
-        self.assertIn("严禁把对方的话拆解成前半句/后半段", decision.voice_anchor)
+        self.assertEqual(decision.voice_anchor, "")
+        self.assertNotIn("观点争论", decision.guidance)
 
     def test_chat_flow_ordinary_chat_has_no_anchor(self) -> None:
         controller = ChatFlowController()
@@ -85,43 +89,54 @@ class VoiceTuningTests(unittest.TestCase):
         controller = ChatFlowController()
         turn = _make_turn("谁让真红你这么可爱的")
         decision = controller.begin_turn(turn)
-        self.assertIn("轻微难为情", decision.voice_anchor)
-        self.assertIn("不要套用固定的惊讶反问", decision.voice_anchor)
+        self.assertEqual(decision.voice_anchor, "")
+        self.assertNotIn("难为情", decision.guidance)
 
     def test_repeated_recent_affection_changes_praise_anchor_to_familiar_warmth(self) -> None:
         controller = ChatFlowController()
         first = _make_turn("你今天真可爱", message_id="m-affection-1")
         first_decision = controller.begin_turn(first)
-        self.assertIn("轻微难为情", first_decision.voice_anchor)
+        self.assertEqual(first_decision.voice_anchor, "")
         controller.finish_turn(first, final_text="……突然夸这个干什么。", expanded=False)
 
         second = _make_turn("你刚才说我可爱，我也喜欢你", message_id="m-affection-2")
         second_decision = controller.begin_turn(second)
-        self.assertNotIn("近期频繁", second_decision.voice_anchor)
+        self.assertEqual(second_decision.voice_anchor, "")
         controller.finish_turn(second, final_text="嗯，我听见了。", expanded=False)
 
         third = _make_turn("老婆，我也喜欢你", message_id="m-affection-3")
         third_decision = controller.begin_turn(third)
-        self.assertIn("近期频繁", third_decision.voice_anchor)
-        self.assertIn("不要每次都表现得意外或害羞", third_decision.voice_anchor)
+        self.assertEqual(third_decision.voice_anchor, "")
+        self.assertNotIn("频繁", third_decision.habit_guidance)
 
     def test_intimate_address_alone_does_not_trigger_a_surprised_reaction(self) -> None:
         controller = ChatFlowController()
         decision = controller.begin_turn(_make_turn("老婆，帮我看一下这个报错"))
-        self.assertIn("称呼本身是熟悉的称谓", decision.voice_anchor)
-        self.assertNotIn("轻微难为情", decision.voice_anchor)
+        self.assertEqual(decision.voice_anchor, "")
+        self.assertFalse(decision.address_only)
 
     def test_persona_contains_three_beat_rhythm_and_anchors(self) -> None:
-        persona_path = Path("private/profile/shinku/persona.md")
-        doc = load_persona(persona_path)
+        # Preserve this historical node while replacing the obsolete three-
+        # beat contract. Public tests must not depend on private profile files;
+        # the actual private composition is covered by private LA06 regressions.
+        persona = "配置的声线。长度和表达顺序服从当前内容，认真帮助时说明必要理由。"
+        with tempfile.TemporaryDirectory() as tmp:
+            persona_path = Path(tmp) / "persona.md"
+            persona_path.write_text(persona, encoding="utf-8")
+            doc = load_persona(persona_path)
         self.assertTrue(doc.configured)
-        self.assertIn("三拍结构", doc.text)
-        self.assertIn("具体反应 → 自己的判断或理由 →（必要时）一个真问题", doc.text)
-        self.assertIn("不用破折号补刀", doc.text)
-        self.assertIn("绝不做催人睡觉、叮嘱休息的照护员", doc.text)
-        self.assertIn("少拿这种话来哄我", doc.text)
-        self.assertIn("熟悉的亲密称呼和近期反复表达的喜欢", doc.text)
-        self.assertIn("害羞只是偶尔出现的真实反应", doc.text)
+        self.assertEqual(doc.text, persona)
+        calls = []
+        bridge = QQAgentBridge(runtime=SimpleNamespace(call_chat_json=lambda **kw: calls.append(kw) or dialogue_review_result(kw) or {"speech": "收到。"}),
+            system_prompt=doc.text, memory_service=None, sender=None)
+        bridge.handle_turn(_make_turn("我刚忙完，今天好累啊"))
+        self.assertEqual(len(calls), 1)
+        prompt = calls[0]["system_prompt"] + calls[0]["user_prompt"] + "\n".join(calls[0]["system_extra_blocks"])
+        self.assertIn(persona, prompt)
+        self.assertNotIn("两拍接住", prompt)
+        self.assertNotIn("优先遵循三拍结构", prompt)
+        self.assertNotIn("声线微调提示", prompt)
+
 
 
 if __name__ == "__main__":

@@ -134,7 +134,7 @@ def test_stop_during_segment_delay_is_rechecked_before_send(memory, monkeypatch)
     assert sent == ["第一句。"] and result.delivery_status == "partial"
 
 
-def test_stop_during_voice_render_prevents_audio_and_text_fallback(memory):
+def test_stop_during_voice_render_preserves_prior_text_and_prevents_audio(memory):
     state = QQCommandState(reply_mode="voice")
     sent = []
     def renderer(text):
@@ -143,8 +143,9 @@ def test_stop_during_voice_render_prevents_audio_and_text_fallback(memory):
     subject = bridge(lambda m: sent.append(m) or DeliveryResult(True, "sent"), memory,
                      command_state=state, voice_renderer=renderer)
     result = subject._deliver_text(turn(), "第一句。第二句。")
-    assert not sent and not result.sent and result.delivery_status == "suppressed"
-    assert not history(memory)
+    assert [message.segments[0].kind for message in sent] == ["text", "text"]
+    assert not result.sent and result.delivery_status == "partial"
+    assert len(history(memory)) == 1 and history(memory)[0].text == "第一句。第二句。"
 
 
 def test_stop_after_text_in_both_mode_prevents_voice(memory):
@@ -187,7 +188,7 @@ def test_voice_delivery_records_complete_original_once(memory):
     assert history(memory)[0].metadata["delivery_content_complete"] is True
 
 
-def test_voice_failure_fallback_uses_shaping_and_stop_checks(memory):
+def test_voice_mode_stop_during_text_prevents_remaining_text_and_audio(memory):
     state = QQCommandState(reply_mode="voice")
     attempted = []
     def sender(message):
@@ -198,7 +199,7 @@ def test_voice_failure_fallback_uses_shaping_and_stop_checks(memory):
         return DeliveryResult(True, "sent")
     subject = bridge(sender, memory, command_state=state, voice_renderer=lambda _: "C:/fixture.wav")
     result = subject._deliver_text(turn(), "第一句。第二句。")
-    assert attempted == [("audio", ""), ("text", "第一句。")]
+    assert attempted == [("text", "第一句。")]
     assert result.delivery_status == "partial" and history(memory)[0].text == "第一句。"
 
 

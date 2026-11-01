@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "ff5b955c6a0f8533acb75adedfea61dedb2663b7",
+  "mode": "deterministic_offline_only",
+  "cases": [
+    {
+      "id": "plain_chat",
+      "node": "tests/test_agent_conversation_loop.py::test_plain_reply_one_call_no_preparer_and_no_business_success",
+      "hard_gate": "普通答复一请求零工具，不宣称行动成功"
+    },
+    {
+      "id": "simple_read",
+      "node": "tests/test_agent_conversation_loop.py::test_record_read_and_contract_in_final_share_same_loop",
+      "hard_gate": "实际读取并交付，原记录不重跑"
+    },
+    {
+      "id": "single_file_write",
+      "node": "tests/test_agent_conversation_loop.py::test_declaration_then_real_write_then_receipt_gate_no_preparation",
+      "hard_gate": "真实文件结果核验"
+    },
+    {
+      "id": "project_analysis",
+      "node": "tests/test_agent_conversation_loop.py::test_read_before_local_contract_rebuilds_real_ledger_and_retains_strict_checks",
+      "hard_gate": "普通分析分层验收，精确条件严格"
+    },
+    {
+      "id": "failure_diagnosis",
+      "node": "tests/test_agent_conversation_loop.py::test_read_receipt_survives_rejected_premature_final_without_rereading",
+      "hard_gate": "保留原错误，拒绝过早成稿后不重读"
+    },
+    {
+      "id": "multi_step_modify",
+      "node": "tests/test_agent_conversation_loop.py::test_real_sdk_native_declaration_write_and_result_stay_in_one_history",
+      "hard_gate": "真实SDK声明、写入、核验的历史配对"
+    },
+    {
+      "id": "failure_replan",
+      "node": "tests/test_agent_stage_strategy.py::test_real_syntax_failure_replans_and_verifies_correction_without_repeating_effect",
+      "hard_gate": "真实失败保留、修正后独立核验"
+    },
+    {
+      "id": "long_material_summary",
+      "node": "tests/test_agent_conversation_loop.py::test_ninety_percent_summary_and_native_loop_share_original_task_budget",
+      "hard_gate": "九成摘要与执行共用累计预算，保留原文"
+    },
+    {
+      "id": "restart_recovery",
+      "node": "tests/test_agent_conversation_loop.py::test_actual_store_restart_preserves_dynamic_contract_and_never_replays_write",
+      "hard_gate": "SQLite重开，不重放已成功副作用"
+    },
+    {
+      "id": "user_supplement",
+      "node": "tests/test_agent_material_integration.py::test_i07_i09_supplement_keeps_task_budget_and_old_result_event_without_auto_resume",
+      "hard_gate": "补充要求保留旧事件，未授权不自动恢复"
+    },
+    {
+      "id": "cancel_revoke",
+      "node": "tests/test_agent_conversation_loop.py::test_dynamic_contract_never_bypasses_original_execution_boundary",
+      "hard_gate": "取消、撤权、审批、预算继续生效"
+    },
+    {
+      "id": "foreign_or_expired_evidence",
+      "node": "tests/test_agent_runtime_boundary.py::test_a03_cross_scope_cannot_query_cancel_resume_or_read",
+      "hard_gate": "跨作用域不可读写或恢复"
+    }
+  ],
+  "quality_or_provider_cost_claim": "not_measured"
+}

@@ -68,12 +68,12 @@ class MessageBoundaryTests(unittest.TestCase):
     def test_inline_qq_image_markup_becomes_a_real_attachment(self) -> None:
         message = IncomingMessage.from_event(
             {
-                "raw_message": r'<img src="file://C:\\Users\\as233\\photo.png" />你看这是谁',
+                "raw_message": r'<img src="file://C:\\Users\\fixture-user\\photo.png" />你看这是谁',
             }
         )
         self.assertEqual(message.text, "你看这是谁")
         self.assertTrue(message.has_media)
-        self.assertEqual(message.attachments[0]["url"], r"file://C:\\Users\\as233\\photo.png")
+        self.assertEqual(message.attachments[0]["url"], r"file://C:\\Users\\fixture-user\\photo.png")
 
     def test_cq_image_markup_is_not_collapsed_into_plain_text(self) -> None:
         message = IncomingMessage.from_event(

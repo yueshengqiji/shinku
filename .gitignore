@@ -27,3 +27,25 @@ private/
 
 .env
 .env.local
+
+# --- 运行期产物：生成物，可按 docs/*.md 里的记录重建，不进仓库 ---
+# 每个 MEMORY_STAGE_* 目录约 210 个文件 / 50+ MB（隔离库 memory.sqlite3、PAIRED.md、PDF）
+docs/MEMORY_STAGE_*/
+docs/MEMORY_UPGRADE_RESULTS_*/
+# 每次离线审计一个目录，内含 pytest.xml（单个约 300 KB）
+docs/AGENT_FRESH_AUDIT_*/
+# 运行态 dump（sqlite3 / PDF / files）
+docs/AGENT_DOCUMENT_PLANNER_*/
+docs/AGENT_LONG_TASK_LIVE_*/
+docs/AGENT_SLICES_LIVE_*/
+docs/AGENT_READONLY_LIVE_*/
+docs/AGENT_ASYNC_LIVE_*/
+docs/QQ_AT_REPLY_LIVE_*/
+docs/QQ_VISUAL_CONTINUITY_LIVE_*/
+docs/QQ_VISUAL_PROVENANCE_LIVE_*/
+docs/SELF_GROUP_ACTIVITY_LIVE_*/
+
+# 本地输出与临时件
+output/
+tmp/
+scratch_output.txt

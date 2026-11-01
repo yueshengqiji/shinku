@@ -13,7 +13,6 @@ B1 先提供 ``/health`` 与 ``/health/ready``；当前后端还挂载本机控�
 
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -30,6 +29,7 @@ from .qq_diagnostics import build_qq_diagnostics_router
 from .memory_admin import build_memory_admin_router
 from .capabilities import build_capabilities_router
 from .model_services import build_model_services_router
+from .pet import build_pet_router
 from ..qq.host import NapCatHost
 from ..qq.webhook import create_napcat_webhook_router
 
@@ -75,6 +75,10 @@ def create_app(
         memory_store = getattr(memory_service, "store", None)
         lifecycle = getattr(memory_store, "lifecycle", None)
         review = getattr(memory_service, "lifecycle_review", None)
+        projection = getattr(memory_service, "projection", None)
+        projection_start = getattr(projection, "start", None)
+        if callable(projection_start):
+            projection_start()
         review_start = getattr(review, "start", None)
         if callable(review_start):
             review_start()
@@ -91,7 +95,7 @@ def create_app(
             shutdown = getattr(coordinator, "shutdown", None)
             if callable(shutdown):
                 shutdown(wait=False)
-            for owner, method in ((review, "stop"), (lifecycle, "stop_worker"), (memory_store, "stop_embedding_worker")):
+            for owner, method in ((projection, "stop"), (review, "stop"), (lifecycle, "stop_worker"), (memory_store, "stop_embedding_worker")):
                 closer = getattr(owner, method, None)
                 if callable(closer):
                     closer()
@@ -108,7 +112,7 @@ def create_app(
     )
     app.state.settings = resolved
     app.include_router(build_observability_router(settings=resolved, assembly=qq_agent_assembly))
-    app.include_router(build_qq_diagnostics_router(napcat_host=napcat_host, napcat_config=napcat_config))
+    app.include_router(build_qq_diagnostics_router(napcat_host=napcat_host, napcat_config=napcat_config, assembly=qq_agent_assembly))
     # 控制中枢的状态面和写操作都只允许本机请求；模型服务路由另外再做一次来源校验。
     app.include_router(
         build_debug_hub_router(
@@ -140,6 +144,7 @@ def create_app(
         if memory_service is not None:
             app.include_router(build_memory_admin_router(memory_service))
         app.include_router(build_capabilities_router(qq_agent_assembly))
+    app.include_router(build_pet_router(settings=resolved, assembly=qq_agent_assembly))
     if napcat_host is not None:
         app.state.napcat_host = napcat_host
         app.include_router(

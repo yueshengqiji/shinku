@@ -114,7 +114,3 @@ class RuntimeModelServiceController:
 
     def attach_runtime(self, runtime: Any) -> None:
         self.runtime = runtime
-
-    def live_model(self) -> str:
-        bundle = getattr(self.runtime, "chat", None)
-        return str(getattr(bundle, "model", "") or "")

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
 
@@ -19,6 +20,11 @@ class _Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
+        if kwargs.get("system_prompt") == "群聊说话人与任务归属核验":
+            return {"verdict": "allow", "relation": "addressed", "task_claim": "none", "task_id": ""}
         return self.response
 
 
@@ -175,7 +181,10 @@ class P3AutonomousSilenceTests(unittest.TestCase):
 
         bridge._run_agent = fake_agent_run
 
-        result = bridge.handle_turn(_turn("帮我处理一下", mode="autonomous"))
+        item = _turn("帮我处理一下", mode="autonomous")
+        item.messages[0].raw_event["_shinku_group_context"] = {"current": {
+            "message_id": item.primary_message_id, "sender_id": "u-1", "bot_exchange_confirmed": True}}
+        result = bridge.handle_turn(item)
 
         self.assertEqual(result.final_text, "已经处理。")
         self.assertEqual(len(agent_calls), 1)

@@ -1,41 +1,36 @@
-# D1：发布边界审计
+# 2026-11-01 开发者预览发布验收
 
-## 当前结论
+本次发布当前公共源码快照；不发布本机私用执行器、模型配置、数据库与历史回执。
+本地未发布历史曾包含已删除的个人信息，因此公开快照以现有公开 main 为父提交，
+普通快进更新；不携带私人中间提交，不改写已有公开历史。
 
-自动化边界检查已通过，项目许可证已确定为 Apache-2.0。D4 已完成最终依赖锁定、源码
-发布包和 runtime wheel 的复验。许可证决策记录见 `docs/LICENSE_DECISION.md`，构建产物
-记录见 `docs/RELEASE_ARTIFACT.md`。
+包含当前 src/frontend、公共测试、脚本与使用指南。部分仅供维护者使用的历史计划
+不新增到公开树；已有公开历史文档仅作历史参考。私用日志执行器测试移出公共套件。
 
-## 已核对项目
+必要打包修复：将 log-view.js 纳入 wheel，安装测试逐项验证 HTML 引用资源。
+最终验收结果在本文件更新。历史全量数量不等于本版已全量通过。
 
-- 独立代码、测试、脚本和文档均经过当前发布边界审计；
-- `scripts/check_shinku_admission.py` 的四项准入检查全部通过；
-- 直接依赖已登记在 `docs/THIRD_PARTY_LICENSES.md`；
-- 独立仓库没有发现图片、音频、视频、字体或其他二进制素材；
-- 仓库根的 `.env`、运行期 `data/` 和缓存目录不属于发布内容；
-- NOTICE 已更新为当前 C 阶段实际内容，并明确旧项目只用于来源审计。
-- `scripts/build_shinku_release_manifest.py` 已生成 201 个清洁发布文件，排除了密钥、
-  运行期数据、缓存、egg-info 和媒体素材。
-- 根目录 `LICENSE`、`pyproject.toml` 和 NOTICE 已统一为 Apache-2.0 发布口径。
-- `requirements-cleanenv.lock` 固定了 cleanenv 的完整非 editable 依赖快照；
-  `requirements-build.lock` 固定了本次验证使用的构建工具版本。
-- `dist/shinku-0.1.0-source.zip` 和 `dist/shinku-0.1.0-py3-none-any.whl` 均通过
-  `scripts/audit_shinku_artifact.py`；dist 被 `.gitignore` 排除，不进入源码仓库。
-- [TARGET_REHEARSAL.md](TARGET_REHEARSAL.md) 记录了新虚拟环境安装、临时端口启动和只读
-  记忆迁移演练，全部通过。
+复验命令：
 
-## 发布前仍需人工确认
-
-1. 发布前仍需人工确认 persona、voice、游戏台词、美术和网络素材不被外部补入发布包；
-2. 已完成隔离临时环境的安装、启动、回滚停止和记忆迁移演练；仍需在正式目标环境确认真实数据路径、备份/恢复方案与部署操作；
-3. 尚未切换旧 `9998` 主入口。是否切换仍需使用者安排真实运行窗口、备份与回滚。
-
-执行命令：
-
-```powershell
+```sh
 python scripts/audit_shinku_release.py
-python scripts/build_shinku_release_manifest.py
-python scripts/build_shinku_release_bundle.py
-python scripts/audit_shinku_artifact.py dist/shinku-0.1.0-source.zip
-python scripts/audit_shinku_artifact.py dist/shinku-0.1.0-py3-none-any.whl
+python -m pytest tests/test_frontend_packaging.py tests/test_release_scope.py tests/test_cli.py
 ```
+
+Linux 桌面批处理加 `python scripts/run_desktop_batch.py --` 前缀。
+源码包与 wheel 通过 `scripts/audit_shinku_artifact.py` 检查；密钥和私人内容仍需独立人工审查。
+未授权网络/模型评估不属于此离线发布检查。当前缺口见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。
+
+## 本次实际验收
+
+- Linux / Python 3.13 环境，独立公共候选的 7926 项公共测试可收集；这是收集检查，未宣称全量运行通过。
+- 公共候选定向 106 项通过：源码包到 wheel、离开源码目录后的 HTTP 前端资源、CLI、发布范围、
+  工作台草稿/任务隔离、Agent 记忆边界和 Goozma 插件。
+- 匿名化多人会话夹具 5 项通过；仅替换私人化文案和消息标识，不改变产品源码或验收断言。
+- 首轮打包发现遗漏 log-view.js / sessions.js，修复后实际 HTML 引用全部返回成功。
+- 发布前内容审查覆盖当前公开树、已知历史个人信息、私用导入和实际归档；
+  自动匹配的测试密钥均为合成样例，未将真实数据或私用执行器纳入候选。
+- 未调用真实模型、未发送 QQ、未加载正式服务；未做 Windows/macOS 实机与长期性能验收。
+- 基础依赖由现有隔离验证环境提供；本次不是从空机器联网解析所有依赖的兼容性证明。
+
+源码 ZIP 与 runtime wheel 已构建并分别通过产物边界检查；未发布到 PyPI，也未创建 GitHub Release。

@@ -52,6 +52,7 @@ class RuntimeLimits:
     qq_visual_followup_turns: int = 3
     session_list_limit: int = 50
     session_message_limit: int = 120
+    qq_autonomous_queue_ttl_seconds: float = 30.0
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "RuntimeLimits":
@@ -78,6 +79,13 @@ class RuntimeLimits:
                 minimum=1,
                 maximum=8,
             ),
+            qq_autonomous_queue_ttl_seconds=_float_value(
+                env,
+                "SHINKU_QQ_AUTONOMOUS_QUEUE_TTL_SECONDS",
+                30.0,
+                minimum=5.0,
+                maximum=120.0,
+            ),
             session_list_limit=_int_value(
                 env,
                 "SHINKU_SESSION_LIST_LIMIT",
@@ -99,6 +107,7 @@ class RuntimeLimits:
             "qq_batch_window_seconds": self.qq_batch_window_seconds,
             "qq_visual_context_ttl_seconds": self.qq_visual_context_ttl_seconds,
             "qq_visual_followup_turns": self.qq_visual_followup_turns,
+            "qq_autonomous_queue_ttl_seconds": self.qq_autonomous_queue_ttl_seconds,
             "session_list_limit": self.session_list_limit,
             "session_message_limit": self.session_message_limit,
         }

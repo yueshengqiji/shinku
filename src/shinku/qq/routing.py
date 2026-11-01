@@ -60,6 +60,10 @@ class ReplyRoutePolicy:
         env = os.environ if environ is None else environ
         raw_ids = str(env.get("SHINKU_QQ_BOT_IDS", "") or "")
         raw_names = str(env.get("SHINKU_QQ_BOT_NAMES", "") or "")
+        if env.get("SHINKU_CHARACTER_FILE"):
+            from shinku.character import load_character
+            character = load_character(env["SHINKU_CHARACTER_FILE"])
+            raw_names = ",".join(character.aliases)
         bot_ids = frozenset(item.strip() for item in raw_ids.split(",") if item.strip())
         bot_names = tuple(item.strip() for item in raw_names.split(",") if item.strip())
 

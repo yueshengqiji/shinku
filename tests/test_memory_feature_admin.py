@@ -37,7 +37,10 @@ def test_features_reports_loaded_cde_with_b_off_without_reading_data(tmp_path, m
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {"ok": True, "configured": expected,
-                               "initialized": expected, "effective": expected}
+                               "initialized": expected, "effective": expected,
+                               "context_projection":{"configured":False,"initialized":False,
+                                   "semantic_configured":False,"policy_version":policy.projection.version,
+                                   "last_diagnostics":{},"index_status":{}}}
 
 
 def test_features_distinguishes_requested_and_available_components(tmp_path):

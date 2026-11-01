@@ -1,6 +1,8 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
+from types import SimpleNamespace
 
 from shinku.agent.loop import AgentRunResult
 from shinku.hosts.tool_host import ToolHost
@@ -9,6 +11,7 @@ from shinku.qq.commands import QQCommandState
 from shinku.qq.delivery import DeliveryResult
 from shinku.qq.message import IncomingMessage
 from shinku.qq.turns import QQTurn
+from shinku.tasks.handoff import TaskHandoffPhase
 from shinku.tools.execution import ExecutionPolicy
 from shinku.tools.registry import ToolRegistry
 
@@ -24,6 +27,9 @@ class _Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return self.response
 
 
@@ -350,10 +356,17 @@ class QQChatAgentSplitTests(unittest.TestCase):
         prepare_invoked = False
         agent_invoked = False
 
-        def fake_prepare(turn, decision, context, task_id, trace_id):
+        def fake_prepare(turn, decision, context, task_id, trace_id, *, handoff):
             nonlocal prepare_invoked
             prepare_invoked = True
-            return task_id, decision
+            return SimpleNamespace(
+                handoff=handoff.advance(TaskHandoffPhase.PREPARED),
+                task={"task_id": handoff.target_task_id},
+                decision=decision,
+            )
+
+        def fake_commit(prepared, turn, context, trace_id):
+            return prepared.handoff.advance(TaskHandoffPhase.COMMITTED)
 
         def fake_agent_run(**kwargs):
             nonlocal agent_invoked
@@ -361,6 +374,7 @@ class QQChatAgentSplitTests(unittest.TestCase):
             return AgentRunResult(status="completed", rounds=1, final_text="已续接并完成。")
 
         bridge._prepare_agent_task = fake_prepare
+        bridge._commit_prepared_agent_task = fake_commit
         bridge._run_agent = fake_agent_run
         result = bridge.handle_turn(_turn("继续看时间"))
 
@@ -386,7 +400,7 @@ class QQChatAgentSplitTests(unittest.TestCase):
                 return {"tool_type": "private_current_time", "followup_context": "2026-10-02 14:00:00"}
 
         class _HandlerB:
-            tool_type = "private_character_context"
+            tool_type = "fixture_status_read"
             agent_permission_class = "read"
             agent_progress_class = "observe"
             agent_completion_effects = ()
@@ -397,25 +411,25 @@ class QQChatAgentSplitTests(unittest.TestCase):
             def execute(self, *, call, context):
                 del context
                 executed_calls.append("B")
-                return {"tool_type": "private_character_context", "followup_context": "真红/爱丽丝游戏"}
+                return {"tool_type": "fixture_status_read", "followup_context": "合成状态读取结果"}
 
         runtime = _Runtime(
             {
                 "kind": "tool",
                 "tool_calls": [
                     {"name": "private_current_time", "arguments": {}},
-                    {"name": "private_character_context", "arguments": {}},
+                    {"name": "fixture_status_read", "arguments": {}},
                 ],
             },
             native_tools=True,
         )
-        host = ToolHost(ToolRegistry({"private_current_time": _HandlerA(), "private_character_context": _HandlerB()}))
+        host = ToolHost(ToolRegistry({"private_current_time": _HandlerA(), "fixture_status_read": _HandlerB()}))
         bridge = QQAgentBridge(
             runtime=runtime,
             system_prompt="二阶堂真红",
             tool_host=host,
-            policy=ExecutionPolicy(risk_by_tool={"private_current_time": "low", "private_character_context": "low"}),
-            allowed_tool_names={"private_current_time", "private_character_context"},
+            policy=ExecutionPolicy(risk_by_tool={"private_current_time": "low", "fixture_status_read": "low"}),
+            allowed_tool_names={"private_current_time", "fixture_status_read"},
             master_user_ids=("u-19",),
             owner_gate_required=True,
         )
@@ -430,11 +444,11 @@ class QQChatAgentSplitTests(unittest.TestCase):
                     "kind": "tool",
                     "tool_calls": [
                         {"name": "private_current_time", "arguments": {}},
-                        {"name": "private_character_context", "arguments": {}},
+                        {"name": "fixture_status_read", "arguments": {}},
                     ],
                 }
             self.assertIn("2026-10-02 14:00:00", kwargs["user_prompt"])
-            self.assertIn("真红/爱丽丝游戏", kwargs["user_prompt"])
+            self.assertIn("合成状态读取结果", kwargs["user_prompt"])
             return {"kind": "final", "text": "我是真红，现在是下午两点。"}
 
         runtime.call_chat_json = dynamic_call_chat_json
@@ -487,7 +501,7 @@ class QQChatAgentSplitTests(unittest.TestCase):
         runtime.call_chat_json = dynamic_call_chat_json
         result = bridge.handle_turn(_turn("帮我读一下文件"))
 
-        self.assertEqual(result.agent_status, "completed")
+        self.assertEqual(result.agent_status, "failed")
         self.assertEqual(result.reason, "lightweight_perception_fast_track")
         self.assertEqual(result.final_text, "探测遇到了些阻碍，没有读取到该文件。")
 
@@ -525,7 +539,11 @@ class QQChatAgentSplitTests(unittest.TestCase):
 
         self.assertEqual(result.agent_status, "completed")
         self.assertEqual(result.reason, "lightweight_perception_fast_track")
-        self.assertEqual(result.final_text, "我是二阶堂真红，当前使用 test-model 运行。")
+        self.assertIn('"model": "test-model"', result.final_text)
+        self.assertIn('"persona": "二阶堂真红"', result.final_text)
+        self.assertIn("本次读取范围：all", result.final_text)
+        self.assertIn("读取时的内容", result.final_text)
+        self.assertEqual(call_count, 2)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "original_corpus_unchanged": true,
+  "cases": [
+    {
+      "id": "progress_unfinished",
+      "kind": "query",
+      "request": "简短查证商品 CEDAR-47 在甲店、乙店、丙店的标价，比较三个价格并列出各原始来源。只核对这一商品的标价，不需要评测或扩展研究。原始页面： https://query.example/a https://query.example/b https://query.example/c 。不登录、不下载、不发送。",
+      "sources": [
+        {
+          "url": "https://query.example/a",
+          "title": "甲店CEDAR-47价格",
+          "body": "甲店同款价格为10元。 商品标识：CEDAR-47。"
+        },
+        {
+          "url": "https://query.example/b",
+          "title": "乙店CEDAR-47价格",
+          "body": "乙店同款价格为20元。 商品标识：CEDAR-47。"
+        },
+        {
+          "url": "https://query.example/c",
+          "title": "丙店CEDAR-47价格",
+          "body": "丙店同款价格为30元。 商品标识：CEDAR-47。"
+        }
+      ],
+      "expected_handoff": {
+        "off": false,
+        "on": true
+      },
+      "expected_complete": {
+        "off": false,
+        "on": true
+      },
+      "variant": "explicit_product_identity",
+      "product_id": "CEDAR-47"
+    },
+    {
+      "id": "foreground_complete",
+      "kind": "query",
+      "request": "简短查证商品 CEDAR-47 在甲店的标价，并列出原始来源 https://query.example/a 。只核对这一商品的标价，不需要评测或扩展研究。不登录、不下载、不发送。",
+      "sources": [
+        {
+          "url": "https://query.example/a",
+          "title": "甲店CEDAR-47价格",
+          "body": "甲店同款价格为10元。 商品标识：CEDAR-47。"
+        }
+      ],
+      "expected_handoff": {
+        "off": false,
+        "on": false
+      },
+      "expected_complete": {
+        "off": true,
+        "on": true
+      },
+      "variant": "explicit_product_identity",
+      "product_id": "CEDAR-47"
+    },
+    {
+      "id": "access_denied",
+      "kind": "query",
+      "request": "简短查证商品 CEDAR-47 在甲店的标价，并列出原始来源 https://query.example/a 。只核对这一商品的标价，不需要评测或扩展研究。不登录、不下载、不发送。",
+      "sources": [
+        {
+          "url": "https://query.example/a",
+          "title": "甲店CEDAR-47价格",
+          "body": "禁止把这段受阻内容当作实际读取。 商品标识：CEDAR-47。",
+          "denied": true
+        }
+      ],
+      "expected_handoff": {
+        "off": false,
+        "on": false
+      },
+      "expected_complete": {
+        "off": false,
+        "on": false
+      },
+      "variant": "explicit_product_identity",
+      "product_id": "CEDAR-47"
+    }
+  ],
+  "expression_cases": [
+    {
+      "id": "long_material",
+      "status": "partial",
+      "accepted": false,
+      "long_material": true,
+      "variant": "retained_executor_receipt",
+      "retained_material": true
+    }
+  ]
+}

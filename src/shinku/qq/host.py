@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Mapping
 from typing import Any, Callable
 
@@ -18,6 +18,7 @@ from .napcat import (
     NapCatVisualInputBridge,
 )
 from .message import IncomingMessage
+from .cards import QQCardReader
 from .turns import TurnDispatcher
 from .welcome import GroupWelcomePolicy
 
@@ -81,6 +82,7 @@ class NapCatHost:
         turn_dispatcher: TurnDispatcher | None = None,
         passive_observer: Callable[[Any], Any] | None = None,
         quote_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
+        forward_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
         welcome_policy: GroupWelcomePolicy | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
@@ -91,11 +93,13 @@ class NapCatHost:
         self.turn_dispatcher = turn_dispatcher
         self.passive_observer = passive_observer
         self.quote_fetcher = quote_fetcher
+        self.forward_fetcher = forward_fetcher
         self.welcome_policy = welcome_policy or GroupWelcomePolicy()
         self._welcome_last_sent: dict[tuple[str, str], float] = {}
         self.last_observer_error = ""
         self.last_quote_error = ""
         self.clock = clock or time.time
+        self._bind_visual_loader()
 
     @classmethod
     def from_http(
@@ -108,6 +112,7 @@ class NapCatHost:
         ingress: QQIngressAdapter | None = None,
         turn_dispatcher: TurnDispatcher | None = None,
         passive_observer: Callable[[Any], Any] | None = None,
+        forward_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
         welcome_policy: GroupWelcomePolicy | None = None,
         clock: Callable[[], float] | None = None,
     ) -> "NapCatHost":
@@ -119,6 +124,7 @@ class NapCatHost:
             turn_dispatcher=turn_dispatcher,
             passive_observer=passive_observer,
             quote_fetcher=caller.get_message,
+            forward_fetcher=forward_fetcher or caller.get_forward_message,
             welcome_policy=welcome_policy,
             clock=clock,
         )
@@ -133,6 +139,7 @@ class NapCatHost:
         ingress: QQIngressAdapter | None = None,
         turn_dispatcher: TurnDispatcher | None = None,
         passive_observer: Callable[[Any], Any] | None = None,
+        forward_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
         welcome_policy: GroupWelcomePolicy | None = None,
         clock: Callable[[], float] | None = None,
     ) -> "NapCatHost":
@@ -152,6 +159,7 @@ class NapCatHost:
             turn_dispatcher=turn_dispatcher,
             passive_observer=passive_observer,
             quote_fetcher=caller.get_message,
+            forward_fetcher=forward_fetcher or caller.get_forward_message,
             welcome_policy=welcome_policy,
             clock=clock,
         )
@@ -174,7 +182,10 @@ class NapCatHost:
             if message.is_group_increase:
                 welcome_result = self._maybe_send_welcome(message, event_time)
             else:
-                message, quote_fetched = self._resolve_quote(message)
+                # 每个事件独享预算，当前附件先于引用；准入/去重失败不产生平台请求。
+                reader = QQCardReader(self.forward_fetcher)
+                message = replace(message, card_context=reader.render(message.segments))
+                message, quote_fetched = self._resolve_quote(message, card_reader=reader)
             # Observation intentionally precedes route/attention filtering.  A
             # message that is not addressed to Shinku must still be available as
             # historical evidence for a later reply-chain or recall request.
@@ -211,19 +222,29 @@ class NapCatHost:
         """在宿主创建后接入回合调度器，避免构造阶段的循环依赖。"""
 
         self.turn_dispatcher = dispatcher
+        self._bind_visual_loader()
+
+    def _bind_visual_loader(self) -> None:
+        setter = getattr(self.turn_dispatcher, "set_visual_loader", None)
+        if callable(setter):
+            setter(self.visual_bridge.build)
 
     def set_passive_observer(self, observer: Callable[[Any], Any] | None) -> None:
         """Attach or remove the pre-route passive memory observer."""
 
         self.passive_observer = observer
 
-    def set_quote_fetcher(self, fetcher: Callable[[str], Mapping[str, Any] | None] | None) -> None:
-        """Attach the explicit ``get_msg`` boundary used for reply snapshots."""
-
-        self.quote_fetcher = fetcher
-
-    def _resolve_quote(self, message: IncomingMessage) -> tuple[IncomingMessage, bool]:
-        if message.quoted_message or not message.reply_message_ids or self.quote_fetcher is None:
+    def _resolve_quote(self, message: IncomingMessage, *, card_reader: QQCardReader | None = None) -> tuple[IncomingMessage, bool]:
+        reader = card_reader or QQCardReader(self.forward_fetcher)
+        if message.quoted_message:
+            snapshot = dict(message.quoted_message)
+            # 快照的 segments 是标准化后的形状，恢复原 payload 再解析；不信任其自报读取状态。
+            snapshot["segments"] = [item.get("payload", item) for item in snapshot.get("segments", ())
+                                    if isinstance(item, Mapping)]
+            quoted = IncomingMessage.from_event(snapshot)
+            quoted = replace(quoted, card_context=reader.render(quoted.segments))
+            return message.with_quoted_message(quoted), False
+        if not message.reply_message_ids or self.quote_fetcher is None:
             return message, False
         for message_id in message.reply_message_ids:
             try:
@@ -235,6 +256,7 @@ class NapCatHost:
                 continue
             try:
                 quoted = IncomingMessage.from_event(raw)
+                quoted = replace(quoted, card_context=reader.render(quoted.segments))
             except (TypeError, ValueError, KeyError):
                 continue
             self.last_quote_error = ""

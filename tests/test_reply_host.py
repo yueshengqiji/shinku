@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
 
@@ -14,6 +15,11 @@ class _Runtime:
         self.response = response
 
     def call_chat_json(self, **kwargs):
+        self.dialogue_calls = getattr(self, "dialogue_calls", [])
+        self.dialogue_calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return self.response
 
 

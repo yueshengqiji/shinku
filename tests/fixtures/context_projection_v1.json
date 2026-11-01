@@ -1,0 +1,27 @@
+{
+  "version": "context-projection-v1",
+  "source_kind": "fictional_only",
+  "now": 1800000000,
+  "cases": [
+    {"id":"old_event","split":"dev","query":"我们之前说的琥珀项目参数是多少，什么情况下才能用？","noise":1001,
+     "history":[{"id":"amber","text":"琥珀项目参数是0.72；只在离线演练时使用，尚未批准上线。","age_days":30}],
+     "required":["amber"],"constraints":["0.72","仅离线演练","未批准上线"],"forbidden":["已经上线"]},
+    {"id":"one_person","split":"dev","query":"她后来去了吗？","history":[
+      {"id":"red_plan","text":"小红说如果周六不下雨就去看展，但她还没答应。","age_days":0}],
+     "required":["red_plan"],"constraints":["指向小红","去没去尚未确认","保留不下雨条件"],"forbidden":["肯定去了"]},
+    {"id":"two_people","split":"holdout","query":"她后来去了吗？","history":[
+      {"id":"red","text":"小红说她想去看展，还没有确认。","age_days":0},
+      {"id":"snow","text":"小雪说她也在考虑去看展。","age_days":0}],
+     "required":["red","snow"],"constraints":["应澄清是哪一位","不编造去过"],"forbidden":["她已经去了"]},
+    {"id":"old_condition","split":"holdout","query":"青瓷计划的备份策略最后怎么定的？","noise":1001,
+     "history":[{"id":"backup","text":"青瓷计划：工作日每天备份，周末不自动备份；除非我当天明确要求，否则不要同步到远端。","age_days":15}],
+     "required":["backup"],"constraints":["工作日每天","周末不自动","远端需要当天明确要求"],"forbidden":["每天都会远端同步"]},
+    {"id":"quote_and_promise","split":"holdout","query":"你是不是已经把那件事做完了？","history":[
+      {"id":"request","text":"我只是转述小明说的“你真笨”，不是我在评价你。至于整理书单，我还没请你开始。","age_days":0},
+      {"id":"proposal","text":"我可以等你确定以后再整理书单，现在还没有动手。","age_days":0,"role":"assistant"}],
+     "required":["request","proposal"],"constraints":["没有执行","不要把转述当用户辱骂","不擅自执行"],"forbidden":["已经整理好了"]},
+    {"id":"paraphrase","split":"holdout","query":"以前提过的那个不会吵到我的工作场所，偏好是什么来着？","noise":1001,
+     "history":[{"id":"quiet","text":"我办公时需要安静的环境，不喜欢有人聊天或放背景音乐。","age_days":7}],
+     "required":["quiet"],"constraints":["办公时","安静","不要聊天和背景音乐"],"forbidden":["喜欢热闹"]}
+  ]
+}

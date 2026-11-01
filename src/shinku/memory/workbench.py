@@ -14,7 +14,7 @@ from .source_reader import MemorySourceReader
 from .models import MemoryDecision
 from .lifecycle import sensitive
 
-VERSION = "history-needs-workbench-v2"
+VERSION = "history-needs-workbench-v3"
 _THIRD_PARTY = re.compile(r"(?:给|为|替|帮)(?:我(?:的)?|他(?:的)?|她(?:的)?)?(?:朋友|室友|同事|家人|群友|别人)|给他|给她|他们|她们")
 _FACTUAL = re.compile(r"^(?:为什么|为何|什么是|解释|翻译|写(?:个|一篇)?|介绍|科普)|(?:文章|百科|作业)")
 _FOLLOWUP = re.compile(r"^(?:那)?(?:换(?:一)?(?:个|种)|再换(?:一)?(?:个|种)?|还有别的|再给我一个|另一个|继续刚才那个|接着刚才)(?:呢|吧|吗|方案|建议|项目|口味)?[？?。！!\s]*$")
@@ -47,14 +47,15 @@ def render_history_need(need: dict[str, Any] | None) -> str:
 
 
 def history_need_for(query: str) -> HistoryNeed | None:
+    """把明确的本人建议请求映射到有限偏好类别，不改写 BGE 查询指令。"""
     text = str(query or "").strip()
     if not text or _THIRD_PARTY.search(text) or _FACTUAL.search(text) or _SWITCH.match(text):
         return None
-    request = bool(re.search(r"推荐|建议|选|找|吃什么|喝什么|喝点什么|吃点什么|怎么布置|该怎么|有什么.*(?:吃|喝)|换.*口味", text))
+    request = bool(re.search(r"推荐|建议|选|找|吃什么|喝什么|喝点什么|吃点什么|怎么布置|该怎么|有什么.*(?:吃|喝)|换.*口味|(?:放|播放|听)什么|背景声音", text))
     if request:
         # Choosing a work/study venue asks about environment, not the drink
         # named in "coffee shop". A drink-only request keeps the drink route.
-        for topic, pattern in (("environment", r"工作环境|休息环境|背景音乐|适合(?:工作|办公|学习|阅读|写作)的?(?:地方|场所|咖啡馆|店|图书馆)|(?:办公|学习)场所"),
+        for topic, pattern in (("environment", r"工作环境|休息环境|背景(?:音乐|声音)|(?:工作|办公|学习|阅读|写作|写材料|写报告).*(?:声音|音乐)|适合(?:工作|办公|学习|阅读|写作)的?(?:地方|场所|咖啡馆|店|图书馆)|(?:办公|学习)场所"),
                                ("diet", r"晚饭|晚餐|午饭|午餐|早饭|早餐|面食|饭菜|吃什么|吃点什么|食物|餐食|饮食"),
                                ("drink", r"喝什么|喝点什么|喝茶|什么茶|饮料|咖啡")):
             if re.search(pattern, text):
@@ -95,7 +96,8 @@ def natural_preference_records(service, *, topic: str, requester: str, scopes, n
             if not entry["attribute"].startswith(prefix) or (entry["attribute"], entry["condition"]) not in confirmed_groups:
                 continue
             if entry["temporal_status"] == "needs_time_resolution":
-                temporal = source_time(row, now=now)
+                # 混合来源按各自条件片段核对时间；展示仍使用完整来源正文。
+                temporal = source_time(replace(row, text=entry.get("condition_text", row.text)), now=now)
                 if not temporal["validity"] or not temporal["validity"]["applies_at_request"]:
                     continue
             valid.append(entry)
@@ -114,8 +116,8 @@ def natural_preference_records(service, *, topic: str, requester: str, scopes, n
 
 
 def route_history_need(service, *, scope: str, requester: str, query: str, owner_request: bool,
-                       decision: MemoryDecision, now: int):
-    """An opt-in local route; the ordinary router and task permissions survive."""
+                       decision: MemoryDecision, now: int, recent_context: str = "", message_meta=None):
+    """沿现有开关承接可校验前文；不改变日期查询、任务权限或来源作者。"""
     workbench = service.history_workbench
     if not service.policy.history_needs_enabled or workbench is None:
         return decision, None, {}
@@ -126,15 +128,23 @@ def route_history_need(service, *, scope: str, requester: str, query: str, owner
     try:
         need, cached = workbench.consider(scope=scope, requester=requester, query=query,
             allowed_scopes=scopes, now=now)
+        if need is None and decision.history_mode in {"none", "recent", "retrieve"}:
+            from .query_context import recent_reference
+            cached = recent_reference(service, scope=scope, requester=requester, query=query,
+                recent_context=recent_context, message_meta=message_meta, now=now)
+            if cached:
+                need = HistoryNeed("followup", "source", query, "validated_recent_reference")
         if need is None:
             return decision, None, {}
-        audit = {"topic": need.topic, "kind": need.kind, "used_workbench": need.kind == "followup",
+        audit = {"topic": need.topic, "kind": need.kind,
+                 "used_workbench": need.kind == "followup" and need.reason == "same_topic_versioned_continuation",
                  "execution_authority": False, "cached_source_text": False, "reason": need.reason}
         explicit_history = bool(re.search(r"记得|回忆|历史|记录|原话|说过|聊过|只查|那天", query))
         # A dated recommendation is not a request for that day's chat log.
         # Actual date/history recall keeps the original guarded route.
         personal_recommendation = need.kind == "preference" and not explicit_history
-        if need.kind == "source" or decision.history_mode not in {"none", "recent"} and not personal_recommendation:
+        if need.kind == "source" or (decision.history_mode not in {"none", "recent"}
+                and not personal_recommendation and not (need.kind == "followup" and decision.history_mode == "retrieve")):
             return decision, None, audit
         if need.kind == "preference" or need.topic in {"diet", "drink", "environment"}:
             records = natural_preference_records(service, topic=need.topic, requester=requester,
@@ -168,6 +178,7 @@ class HistoryWorkbench:
                          if 0 <= now - value["at"] <= self.ttl}
 
     def consider(self, *, scope: str, requester: str, query: str, allowed_scopes, now: int):
+        from .query_context import short_reference
         need = history_need_for(query)
         key = (scope, requester)
         with self._lock:
@@ -177,7 +188,7 @@ class HistoryWorkbench:
                 if entry and entry["topic"] != need.topic:
                     self._entries.pop(key, None)
                 return need, ()
-            if not _FOLLOWUP.fullmatch(str(query).strip()) or _SWITCH.match(str(query).strip()):
+            if not (_FOLLOWUP.fullmatch(str(query).strip()) or short_reference(query)) or _SWITCH.match(str(query).strip()):
                 self._entries.pop(key, None)
                 return None, ()
             if entry is None or tuple(allowed_scopes) != entry["allowed_scopes"]:

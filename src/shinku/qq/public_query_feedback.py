@@ -51,7 +51,7 @@ _LABELS = {
     "sensitive_query_blocked": "搜索词疑似含敏感信息，为避免外发已取消搜索",
     "search_no_results": "搜索站点明确返回没有匹配结果",
     "search_scope_unmet": "没有取得符合指定来源域名范围的候选，范围外链接已排除",
-    "search_provider_blocked": "搜索站点返回访问限制或验证页，未取得搜索结果",
+    "search_provider_blocked": "搜索工具报告访问受限；是否为验证页需结合站点回执确认，未取得搜索结果",
     "search_result_parse_failed": "搜索页面已打开，但没有识别到结果卡片；不能当作没有结果",
     "search_provider_unavailable": "搜索站点访问失败，未取得搜索结果；不能据此认定整台设备断网",
     "search_relevance_unverified": "搜索候选无法支持本次查询，备用来源也未取得可交付的相关候选",
@@ -75,6 +75,60 @@ _LABELS = {
 _PHASES = frozenset({"browser_start", "navigation", "wait", "page_read", "argument_validation", "public_url"})
 _EXCEPTIONS = frozenset({"RuntimeError", "TypeError", "ValueError", "TimeoutError", "OSError", "PermissionError",
                          "ConnectTimeout", "ReadTimeout", "ConnectionError", "HTTPError", "BrowserDependencyError", "Error"})
+_SEARCH_PROVIDERS = {"anysearch": "AnySearch", "bing": "Bing", "duckduckgo": "DuckDuckGo"}
+_SEARCH_OUTCOMES = {
+    "not_configured": "搜索 API 尚未配置密钥",
+    "auth_failed": "搜索 API 认证失败或账户访问被拒绝",
+    "quota_exhausted": "搜索 API 额度不足",
+    "rate_limited": "搜索 API 请求受到限流",
+    "daily_limit": "本机搜索 API 当日请求上限已达到",
+    "api_error": "搜索 API 返回业务错误，未取得候选",
+    "timeout": "搜索 API 请求超时",
+    "results": "已取得候选结果",
+    "no_results": "页面明确显示没有匹配结果",
+    "parse_failed": "页面已打开，但未识别到可用结果卡片",
+    "unavailable": "访问失败，详细原因未确认",
+    "scope_unmet": "候选不符合指定来源范围",
+    "relevance_unverified": "候选未通过查询相关性筛选",
+    "budget_exhausted": "搜索时间预算已用完",
+}
+
+
+def _search_attempt_feedback(value: Any) -> tuple[str, list[dict[str, Any]]]:
+    """Render only known receipt enums and numeric HTTP statuses, never page text."""
+    if not isinstance(value, (list, tuple)):
+        return "", []
+    lines = []
+    safe_attempts = []
+    for attempt in value[:3]:
+        if not isinstance(attempt, Mapping):
+            continue
+        provider = attempt.get("provider")
+        outcome = attempt.get("outcome")
+        if (not isinstance(provider, str) or provider not in _SEARCH_PROVIDERS
+                or not isinstance(outcome, str) or outcome not in {*_SEARCH_OUTCOMES, "blocked"}):
+            continue
+        safe = {"provider": provider, "outcome": outcome}
+        status = attempt.get("status")
+        label = _SEARCH_PROVIDERS[provider]
+        if type(status) is int and 100 <= status <= 599:
+            safe["status"] = status
+            label += f"（HTTP {status}）"
+        if outcome == "blocked":
+            block_reason = attempt.get("block_reason")
+            if block_reason == "challenge_page":
+                safe["block_reason"] = block_reason
+                text = "检测到人机验证页"
+            elif type(status) is int and status in {401, 403, 407, 429}:
+                safe["block_reason"] = "http_status"
+                text = {401: "站点要求认证", 403: "访问被拒绝", 407: "代理要求认证", 429: "请求受到限流"}[status]
+            else:
+                text = "工具报告访问受限，是否为验证页未确认"
+        else:
+            text = _SEARCH_OUTCOMES[outcome]
+        lines.append(f"{label}：{text}")
+        safe_attempts.append(safe)
+    return "；".join(lines), safe_attempts
 
 
 def tool_failure(call: Any, envelope: Any, handler: Any) -> dict[str, Any]:
@@ -101,6 +155,11 @@ def tool_failure(call: Any, envelope: Any, handler: Any) -> dict[str, Any]:
     if code not in _LABELS:
         code = "tool_reported_error"
     result = {"code": code, "text": _LABELS[code]}
+    if call.name == "private_web_search":
+        detail, attempts = _search_attempt_feedback(updates.get("provider_attempts"))
+        if detail:
+            result["text"] = "未取得可用搜索结果；" + detail
+            result["provider_attempts"] = attempts
     if field:
         result["field"] = field
     phase = updates.get("error_phase")

@@ -1,4 +1,5 @@
 """Batch B: isolated task continuity, no live LLM/QQ/owner database."""
+from reply_review_fixture import dialogue_review_result
 
 import copy
 import json
@@ -67,6 +68,9 @@ class Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         assert self.responses, "unexpected extra model call"
         response = self.responses.pop(0)
         return response(kwargs) if callable(response) else copy.deepcopy(response)

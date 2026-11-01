@@ -13,26 +13,16 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.check_shinku_admission import audit as admission_audit
-
-
-MEDIA_SUFFIXES = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".mp3", ".wav",
-    ".ogg", ".mp4", ".avi", ".mkv", ".flac", ".ttf", ".otf", ".woff", ".woff2",
-})
-IGNORED_DIRS = frozenset({
-    ".git", ".pytest_cache", "__pycache__", ".venv", "venv", "build", "dist", "data", "private",
-})
+from scripts.build_shinku_release_manifest import FORBIDDEN_NAMES, MEDIA_SUFFIXES, iter_release_files
 
 
 def _iter_release_files(root: Path):
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in IGNORED_DIRS for part in path.relative_to(root).parts):
-            continue
-        if path.name in {".env", ".env.local"}:
-            continue
-        yield path
+    """兼容旧入口；检查实际发布候选，而非工作树所有本机证据。
+
+    不能使用build_manifest的合规files列表，它已经移除了媒体/密钥；应检查
+    过滤前候选，否则真正进入发布范围的违规文件会被审计漏掉。
+    """
+    yield from iter_release_files(root)
 
 
 def audit_release(root: str | Path) -> dict[str, object]:
@@ -50,12 +40,15 @@ def audit_release(root: str | Path) -> dict[str, object]:
         if not (repo / relative).is_file():
             findings.append(f"missing_required:{relative}")
 
+    candidates = list(_iter_release_files(repo))
     media = [
         path.relative_to(repo).as_posix()
-        for path in _iter_release_files(repo)
+        for path in candidates
         if path.suffix.lower() in MEDIA_SUFFIXES
     ]
     findings.extend(f"media_in_tree:{path}" for path in media)
+    findings.extend(f"secret_file:{path.relative_to(repo).as_posix()}"
+                    for path in candidates if path.name in FORBIDDEN_NAMES)
 
     license_path = repo / "LICENSE"
     license_text = license_path.read_text(encoding="utf-8") if license_path.exists() else ""

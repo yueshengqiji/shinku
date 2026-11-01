@@ -8,12 +8,28 @@ from __future__ import annotations
 import re
 import time
 
+from shinku.character import SHINKU_CHARACTER
 
-def is_self_group_recall(text: str) -> bool:
+
+def needs_group_activity_context(text: str) -> bool:
+    """Relevance hint for bounded evidence, never a conclusion about the actor.
+
+    Casual questions often omit 'you' or ask about enjoyment rather than speech.
+    Reading our own receipts is useful there, but cannot prove watching, feelings,
+    other people's actions, or permission to read any additional conversation.
+    """
+    text = str(text or "").strip()[:1000]
+    return bool(re.search(r"群里|群聊|群中|群友|哪个群|群\s*\d+", text)
+                and re.search(r"今天|今日|昨[天晚夜日]|前天|刚才|刚刚|之前|先前|上次|最近|那天|\d+[月/-]\d+", text))
+
+
+def is_self_group_recall(text: str, *, aliases=SHINKU_CHARACTER.aliases) -> bool:
     text = str(text or "").strip()[:240]
-    if re.search(r"^(?:请|帮我|帮忙|麻烦)|(?:你|真红)(?:现在)?(?:去|帮|发一条)", text):
+    # 仅用于自身指代候选识别；别名匹配不授予身份或读取权限。
+    actor = "(?:你|" + "|".join(re.escape(name) for name in aliases) + ")"
+    if re.search(r"^(?:请|帮我|帮忙|麻烦)|" + actor + r"(?:现在)?(?:去|帮|发一条)", text):
         return False
-    if re.search(r"(?:你|真红).{0,4}(?:觉得|认为|知道|听说)", text):
+    if re.search(actor + r".{0,4}(?:觉得|认为|知道|听说)", text):
         return False
     historical = re.search(r"刚才|刚刚|刚|之前|先前|上次|今天|昨日|昨天|前天|昨晚|最近|说过|聊过|回复过|发过|\d+[月/-]\d+", text)
     if not historical:
@@ -22,9 +38,9 @@ def is_self_group_recall(text: str) -> bool:
         return False
     group = r"(?:群里|群聊|群友|哪个群|群中|群\s*\d+)"
     speech = r"(?:说(?:话|了|过|什么)|聊|回复|发言|发.{0,4}消息|讲)"
-    return bool(re.search(r"(?:你|真红).{0,22}" + group + r".{0,18}" + speech, text)
-                or re.search(group + r".{0,18}(?:你|真红).{0,22}" + speech, text)
-                or re.search(r"(?:你|真红).{0,18}" + speech + r".{0,12}" + group, text))
+    return bool(re.search(actor + r".{0,22}" + group + r".{0,18}" + speech, text)
+                or re.search(group + r".{0,18}" + actor + r".{0,22}" + speech, text)
+                or re.search(actor + r".{0,18}" + speech + r".{0,12}" + group, text))
 
 
 def activity_window(text: str, *, now: int, date_window=None) -> tuple[int, int]:

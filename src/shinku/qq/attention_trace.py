@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import Counter, deque
 import threading
-import time
 import uuid
 from typing import Any, Mapping
 

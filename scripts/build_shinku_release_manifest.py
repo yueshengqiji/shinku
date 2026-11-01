@@ -1,4 +1,8 @@
-"""Build a deterministic clean-tree release manifest without secrets or runtime data."""
+"""发布候选范围的唯一枚举入口，同时供清单、源码打包与发布前审计使用。
+
+ROOTS决定发布输入，不读取Git忽略规则。枚举保留违规媒体和密钥候选，交给
+各消费者拒绝，不能先过滤掉违规文件再声称审计通过；工作区外的旧证据不改动。
+"""
 
 from __future__ import annotations
 
@@ -15,9 +19,15 @@ ROOTS = (
     "tests",
     "docs",
     "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "AGENTS.md",
+    "examples",
     "LICENSE",
     "NOTICE",
     "pyproject.toml",
+    "setup.py",
+    "MANIFEST.in",
     "requirements-cleanenv.lock",
     "requirements-build.lock",
     ".env.example",
@@ -46,29 +56,34 @@ def _files_under(root: Path, relative: str):
             yield item
 
 
+def iter_release_files(root: Path):
+    """按稳定顺序枚举原始发布候选；共享同一范围，尚未作内容合规筛选。"""
+    seen: set[Path] = set()
+    for relative in ROOTS:
+        for path in _files_under(root, relative):
+            if path not in seen:
+                seen.add(path)
+                yield path
+
+
 def build_manifest(root: str | Path) -> dict[str, object]:
     repo = Path(root).resolve()
     files: list[dict[str, object]] = []
     findings: list[str] = []
-    seen: set[Path] = set()
-    for relative_root in ROOTS:
-        for path in _files_under(repo, relative_root):
-            if path in seen:
-                continue
-            seen.add(path)
-            relative = path.relative_to(repo).as_posix()
-            if path.name in FORBIDDEN_NAMES:
-                findings.append(f"secret_file:{relative}")
-                continue
-            if path.suffix.lower() in MEDIA_SUFFIXES:
-                findings.append(f"media_file:{relative}")
-                continue
-            payload = path.read_bytes()
-            files.append({
-                "path": relative,
-                "bytes": len(payload),
-                "sha256": hashlib.sha256(payload).hexdigest(),
-            })
+    for path in iter_release_files(repo):
+        relative = path.relative_to(repo).as_posix()
+        if path.name in FORBIDDEN_NAMES:
+            findings.append(f"secret_file:{relative}")
+            continue
+        if path.suffix.lower() in MEDIA_SUFFIXES:
+            findings.append(f"media_file:{relative}")
+            continue
+        payload = path.read_bytes()
+        files.append({
+            "path": relative,
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        })
     return {
         "ok": not findings,
         "file_count": len(files),

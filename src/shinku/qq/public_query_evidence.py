@@ -7,7 +7,7 @@ from typing import Any
 
 from shinku.agent.loop import AgentState, AgentDecision
 from shinku.agent.planner import LLMPlanner
-from shinku.agent.research import ResearchLedger
+from shinku.agent_runtime.information import safe_source
 
 
 class PublicQueryEvidence:
@@ -32,6 +32,60 @@ class PublicQueryEvidence:
         self.ledger.observe(call, envelope, handler)
         data = envelope.data or {}
         self.state.tool_calls.append({"name": call.name, "status": envelope.status, "data": data})
+
+    def model_payload(self) -> dict[str, Any]:
+        """Project current receipts, without relying on adapter prose.
+
+        Cards select a source; only successful body reads supply text. This
+        view neither changes the ledger nor expands the source guard. Full
+        bodies remain in the ledger for the independent answer review.
+        """
+        candidates = [row for row in self.ledger.candidates.values()
+            if row.get("origin") in {"executor_search", "executor_page_link"}]
+        sources = list(self.ledger.sources.values())
+        payload = {"schema_version": 1, "candidates": [], "read_sources": [],
+            "omitted_candidates": len(candidates), "omitted_read_sources": len(sources)}
+
+        def size():
+            return len(json.dumps(payload, ensure_ascii=False))
+
+        # Prioritize actual body evidence. The complete JSON, including URLs
+        # and escaped characters, fits the same explicit presentation bound.
+        for row in sources[-3:]:
+            text = row["text"]
+            retained = min(len(text), 4000)
+            item = {key: row[key] for key in ("id", "url", "offset", "next_offset", "truncated",
+                "source_sha256", "chunk_sha256") if key in row}
+            item = safe_source(item)
+            if "[redacted]" in item.get("url", ""):
+                continue
+            payload["read_sources"].append(item)
+            while True:
+                excerpt = text[:retained]
+                displayed = safe_source(excerpt)
+                item.update(text=displayed, observed_text_chars=len(text), model_excerpt_chars=retained,
+                    model_excerpt_truncated=retained < len(text), model_text_redacted=displayed != excerpt,
+                    model_next_offset=row["offset"] + retained if retained < len(text) else None)
+                excess = size() - 16000
+                if excess <= 0 or not retained:
+                    break
+                retained = max(0, retained - excess)
+            if size() > 16000:
+                payload["read_sources"].pop()
+            else:
+                payload["omitted_read_sources"] -= 1
+        for row in candidates[-24:]:
+            item = safe_source({key: row[key] for key in ("id", "url", "title", "snippet", "read_attempts")
+                if key in row})
+            if "[redacted]" in item.get("url", ""):
+                continue
+            item["body_evidence"] = False
+            payload["candidates"].append(item)
+            if size() > 16000:
+                payload["candidates"].pop()
+            else:
+                payload["omitted_candidates"] -= 1
+        return payload
 
     def review(self, answer: str, outcome: str) -> tuple[bool, bool]:
         """Return (safe answer, fully met original goal), independently of label."""
@@ -70,6 +124,15 @@ class PublicQueryEvidence:
             return stopped
         if safe and not (complete and outcome in {"failed", "partial"}):
             return answer, outcome, "verified" if complete else "partial", ""
+        # A bound partial answer with every gap acknowledged can retain its
+        # exact text. Reuse the ledger's downgrade rule rather than buying a
+        # rewrite and spending the remaining task-wide review on the same gap.
+        # It checks current source identities, original conditions and pure
+        # research scope; explicit failure and unsupported prose stay below.
+        recommended = self.ledger.recommended_outcome(answer, outcome, self.state.context)
+        if recommended == "partial" and outcome in {"", "completed"}:
+            self.corrected = True
+            return answer, "partial", "partial", "public_query_partial_outcome_reconciled"
         # A complete supported answer needs only status correction. Otherwise
         # repair the actual answer/citation too, never merely flip its label.
         status_only = complete

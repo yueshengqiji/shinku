@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 from dataclasses import replace
 from types import SimpleNamespace
@@ -24,7 +25,7 @@ def test_short_same_author_reaction_keeps_the_actual_image_and_provenance(text, 
     h = Harness()
     h.receive(message("image", text="", image=True, kind=kind))
     h.now += 5
-    turn = h.receive(message(text=text, kind=kind))
+    turn = h.choose(h.receive(message(text=text, kind=kind)))
     assert turn.visual_context_inherited
     assert turn.visual_context_source_message_id == "image"
     image = QQAgentBridge._images(turn)[0]
@@ -49,9 +50,12 @@ def test_other_author_reaction_never_borrows_the_image_without_exact_quote(text)
 def test_unrelated_or_ambiguous_text_still_closes_implicit_visual_continuity(text):
     h = Harness()
     h.receive(message("image", text="", image=True))
-    assert not QQAgentBridge._images(h.receive(message(text=text)))
-    assert not h.receive(message("later", text="真好看")).visual_context_inherited
-    assert h.receive(message("quoted", reply="image")).visual_context_inherited
+    current = h.receive(message(text=text))
+    assert not QQAgentBridge._images(current) and current.visual_candidates
+    # LB02: a generic phrase cannot close the topic; the decision confirms it.
+    h.choose(current, action="none", topic_change=True)
+    assert not h.receive(message("later", text="真好看")).visual_candidates
+    assert h.choose(h.receive(message("quoted", reply="image"))).visual_context_inherited
 
 
 def test_reaction_window_is_shorter_than_the_explicit_image_reference_ttl():
@@ -59,31 +63,34 @@ def test_reaction_window_is_shorter_than_the_explicit_image_reference_ttl():
     h.receive(message("image", text="", image=True))
     h.now += 61
     assert not QQAgentBridge._images(h.receive(message(text="老婆给的好")))
-    assert h.receive(message("quoted", reply="image")).visual_context_inherited
+    assert h.choose(h.receive(message("quoted", reply="image"))).visual_context_inherited
 
 
 def test_natural_reactions_use_existing_followup_budget_without_resetting_it():
     h = Harness(visual_followup_turns=1)
     h.receive(message("image", text="", image=True))
-    assert h.receive(message(text="老婆给的好")).visual_context_inherited
-    assert not h.receive(message("second", text="真好看")).visual_context_inherited
+    assert h.choose(h.receive(message(text="老婆给的好"))).visual_context_inherited
+    assert not h.receive(message("second", text="真好看")).visual_candidates
 
 
 def test_exhausted_new_image_does_not_fall_back_to_an_older_own_image():
     h = Harness(visual_followup_turns=1)
     h.receive(message("older", text="", image=True))
     h.receive(message("latest", text="", image=True))
-    assert h.receive(message(text="真好看")).visual_context_source_message_id == "latest"
-    assert not h.receive(message("second", text="好喜欢啊")).visual_context_inherited
+    assert h.choose(h.receive(message(text="真好看")), "latest").visual_context_source_message_id == "latest"
+    assert not h.receive(message("second", text="好喜欢啊")).visual_candidates
 
 
 def test_nonaddressed_same_author_reaction_keeps_the_thread_but_topic_change_closes_it():
     h = Harness()
     h.receive(message("image", text="", image=True), scheduled=False)
     h.receive(message("reaction", text="老婆给的好"), scheduled=False)
-    assert h.receive(message()).visual_context_inherited
+    assert h.choose(h.receive(message())).visual_context_inherited
     h.receive(message("topic", text="晚饭吃什么"), scheduled=False)
-    assert not h.receive(message("later", text="真好看")).visual_context_inherited
+    later = h.receive(message("later", text="真好看"))
+    assert later.visual_candidates
+    h.choose(later, action="none", topic_change=True)
+    assert not h.receive(message("closed", text="真好看")).visual_candidates
 
 
 def test_secondary_member_reaction_cannot_select_primary_members_image():
@@ -106,7 +113,7 @@ def test_image_only_previous_answer_is_carried_to_the_matching_visual_followup(t
     assert first.combined_text == ""
     controller.finish_turn(first, final_text="刚好一人一杯，你要大的还是小的？", expanded=False)
     h.now += 5
-    current = h.receive(message(text=text, kind="private"))
+    current = h.choose(h.receive(message(text=text, kind="private")))
     decision = controller.begin_turn(current)
     assert decision.same_topic
     assert "上一轮用户：[图片附件" in decision.previous_exchange
@@ -132,7 +139,10 @@ def test_image_only_exchange_is_not_attached_to_an_unrelated_short_topic(text):
     controller.finish_turn(first, final_text="刚好一人一杯。", expanded=False)
     h.now += 5
     current = h.receive(message(text=text, kind="private"))
-    assert controller.begin_turn(current).previous_exchange == ""
+    decision = controller.begin_turn(current)
+    assert decision.reason == "visual_context_candidate" and not decision.same_topic
+    assert "刚好一人一杯" in decision.previous_exchange
+    assert not QQAgentBridge._images(current)
 
 
 def test_visual_exchange_does_not_leak_across_senders_or_conversations():
@@ -160,7 +170,8 @@ def test_picture_exchange_reactions_do_not_outlive_the_short_reaction_window():
     controller.finish_turn(first, final_text="刚好一人一杯。", expanded=False)
     h.now += 61
     current = h.receive(message(text="老婆给的好", kind="private"))
-    assert controller.begin_turn(current).previous_exchange == ""
+    assert current.visual_candidates and not current.visual_context_inherited
+    assert "刚好一人一杯" in controller.begin_turn(current).previous_exchange
 
 
 def test_failed_picture_input_preserves_the_actual_previous_failure_not_a_fake_description():
@@ -192,8 +203,21 @@ def test_same_source_followup_works_even_when_the_first_response_finished_after_
 
 def test_bridge_passes_image_and_previous_answer_and_does_not_claim_an_unread_image():
     calls = []
-    responses = iter(("刚好一人一杯，你要大的还是小的？", "那就收好，给你大的。"))
-    runtime = SimpleNamespace(call_chat_json=lambda **kw: calls.append(kw) or {"speech": next(responses)})
+    def respond(**kw):
+        calls.append(kw)
+        review = dialogue_review_result(kw)
+        if review is not None:
+            return review
+        main_count = sum(not str(row.get("prompt_cache_key", "")).endswith(":dialogue-review:v5") for row in calls)
+        if main_count == 1:
+            return {"speech": "刚好一人一杯，你要大的还是小的？"}
+        if main_count == 2:
+            import json
+            block = next(item for item in kw["system_extra_blocks"] if item.startswith("【图片候选待确认】"))
+            rows = json.loads(block[block.index('{"candidates"'):])["candidates"]
+            return {"kind": "final", "text": "", "visual_context": {"action": "select", "source_ids": [rows[0]["source_id"]]}}
+        return {"speech": "那就收好，给你大的。"}
+    runtime = SimpleNamespace(call_chat_json=respond)
     bridge = QQAgentBridge(runtime=runtime, system_prompt="真红", memory_service=None, sender=None)
     h = Harness()
     h.dispatcher.handler = bridge.handle_turn
@@ -206,8 +230,11 @@ def test_bridge_passes_image_and_previous_answer_and_does_not_claim_an_unread_im
     h.submit(followup)
     h.pending.append(batch(followup))
     h.dispatcher.flush()
-    assert len(calls) == 2
-    assert calls[1]["user_images"][0]["source_message_id"] == "image"
-    assert "上一轮真红：刚好一人一杯" in calls[1]["user_prompt"]
-    assert "老婆给的好" in calls[1]["user_prompt"]
-    assert "不等于之前读图失败" in "\n".join(calls[1]["system_extra_blocks"])
+    assert len(calls) == 3
+    main_calls = [row for row in calls if not str(row.get("prompt_cache_key", "")).endswith(":dialogue-review:v5")]
+    assert len(main_calls) == 3
+    assert not main_calls[1]["user_images"]
+    assert main_calls[2]["user_images"][0]["source_message_id"] == "image"
+    assert "上一轮真红：刚好一人一杯" in main_calls[2]["user_prompt"]
+    assert "老婆给的好" in main_calls[2]["user_prompt"]
+    assert "不等于之前读图失败" in "\n".join(calls[2]["system_extra_blocks"])

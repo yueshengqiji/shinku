@@ -54,6 +54,18 @@ class Harness:
             visual=NapCatVisualInputBridge().build(msg), scheduled=scheduled,
         ))
 
+    def choose(self, turn, source_message_id="image", *, action="select", topic_change=False):
+        # Controlled semantic decision; the real host still verifies the source.
+        from shinku.qq.visual_selection import apply_selection
+        sources = [row["source_id"] for row in turn.visual_candidates if row["message_id"] == source_message_id]
+        assert action != "select" or sources
+        context = {"qq_turn": turn}
+        result, error = apply_selection(context, {"visual_context": {"action": action,
+            "source_ids": sources if action == "select" else [], "topic_change": topic_change}})
+        assert not error, error
+        assert result == action
+        return context["qq_turn"]
+
     def receive(self, msg, *, scheduled=True):
         self.submit(msg, scheduled=scheduled)
         if scheduled:
@@ -79,7 +91,7 @@ def test_generic_words_do_not_pull_old_image_even_from_same_sender(text):
 def test_same_author_explicit_visual_followup_keeps_original_key_and_author(text):
     h = Harness()
     h.receive(message("image", image=True))
-    turn = h.receive(message(text=text))
+    turn = h.choose(h.receive(message(text=text)))
     assert turn.visual_context_inherited
     assert not turn.visuals_for("query")
     assert turn.visuals_for("image")
@@ -112,7 +124,7 @@ def test_exact_cross_author_quote_selects_original_not_latest_image():
     h = Harness()
     h.receive(message("original", "other", image=True), scheduled=False)
     h.receive(message("latest", "third", image=True), scheduled=False)
-    turn = h.receive(message(reply="original"))
+    turn = h.choose(h.receive(message(reply="original")), "original")
     assert turn.visual_context_source_message_id == "original"
     assert QQAgentBridge._images(turn)[0]["source_sender_id"] == "other"
     assert not turn.visuals_for("query")
@@ -126,7 +138,7 @@ def test_each_sender_retains_their_own_recent_image_after_other_member_posts():
     h = Harness()
     h.receive(message("owner-image", image=True), scheduled=False)
     h.receive(message("other-image", "other", image=True), scheduled=False)
-    assert h.receive(message()).visual_context_source_message_id == "owner-image"
+    assert h.choose(h.receive(message()), "owner-image").visual_context_source_message_id == "owner-image"
 
 
 def test_no_cross_group_inheritance_even_if_message_ids_collide():
@@ -153,8 +165,11 @@ def test_unrelated_unscheduled_topic_change_closes_implicit_followup_but_exact_q
     h = Harness()
     h.receive(message("image", image=True), scheduled=False)
     h.receive(message("topic", text="晚饭吃什么"), scheduled=False)
-    assert not h.receive(message()).visual_context_inherited
-    assert h.receive(message("explicit", reply="image")).visual_context_inherited
+    current = h.receive(message())
+    assert current.visual_candidates and not current.visual_context_inherited
+    h.choose(current, action="none", topic_change=True)
+    assert not h.receive(message("later")).visual_candidates
+    assert h.choose(h.receive(message("explicit", reply="image"))).visual_context_inherited
 
 
 @pytest.mark.parametrize("reply", ["", "image"])
@@ -168,8 +183,8 @@ def test_expired_image_cannot_be_inherited(reply):
 def test_followup_budget_is_not_reset_by_inherited_questions():
     h = Harness(visual_followup_turns=1)
     h.receive(message("image", image=True), scheduled=False)
-    assert h.receive(message()).visual_context_inherited
-    assert not h.receive(message("second")).visual_context_inherited
+    assert h.choose(h.receive(message())).visual_context_inherited
+    assert not h.receive(message("second")).visual_candidates
 
 
 def test_secondary_sender_text_cannot_trigger_primary_image_inheritance():
@@ -240,7 +255,7 @@ def test_unknown_quote_author_is_not_replaced_by_current_sender_or_message():
 def test_private_visual_followup_remains_supported():
     h = Harness()
     h.receive(message("image", image=True, kind="private"))
-    assert h.receive(message(kind="private", text="你看这是谁")).visual_context_inherited
+    assert h.choose(h.receive(message(kind="private", text="你看这是谁"))).visual_context_inherited
 
 
 def test_prompt_ledger_matches_runtime_five_image_limit():

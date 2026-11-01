@@ -123,7 +123,7 @@ python scripts/check_shinku_memory.py `
 实现入口为 `memory/lifecycle.py`、`lifecycle_policy.py`、`lifecycle_review.py`。
 `memory_lifecycle` 是 SQLite 旁表；事件/事实仍是唯一内容来源，检索访问时间
 与有效强化证据分离。完整参数、风险映射、实测报告与上线门槛见
-[实施与验收报告](EBBINGHAUS_MEMORY_IMPLEMENTATION_2026-10-01.md)。
+实施与验收报告（历史/本机资料，未随此快照提供）。
 
 - 新受管事件 L1 保存原文；有效重提/已送达回答的实际采用进入 L2。
 - 时间跨度、UTC 不同日、每日上限与请求去重共同控制长期晋级；默认

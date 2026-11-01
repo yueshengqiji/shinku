@@ -35,8 +35,17 @@ def build_memory_admin_router(service: Any) -> APIRouter:
         }
         configured = {name: bool(getattr(policy, name, False)) for name in names}
         effective = {name: configured[name] and initialized[name] for name in names}
+        projection = getattr(service, "projection", None)
+        projection_policy = getattr(policy, "projection", None)
         return JSONResponse({"ok": True, "configured": configured, "initialized": initialized,
-                             "effective": effective}, headers={"Cache-Control": "no-store"})
+                             "effective": effective, "context_projection": {
+                                 "configured": bool(getattr(projection_policy, "enabled", False)),
+                                 "initialized": projection is not None,
+                                 "semantic_configured": bool(getattr(projection_policy, "semantic_enabled", False)),
+                                 "policy_version": getattr(projection_policy, "version", ""),
+                                 "last_diagnostics": getattr(service, "projection_status", {}),
+                                 "index_status": dict(getattr(getattr(projection, "archive", None), "last_status", {})),
+                             }}, headers={"Cache-Control": "no-store"})
 
     @router.get("/memory/stats", response_model=None)
     def stats(request: Request) -> JSONResponse:

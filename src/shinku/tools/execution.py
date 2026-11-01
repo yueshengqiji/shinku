@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from shinku.phase_timing import timed
+
 import json
 import os
 from collections.abc import Mapping
@@ -206,6 +208,7 @@ def validation_to_envelope(*, invocation: ToolInvocation, validation: Validation
         status="error",
         model_feedback=f"<tool_use_error>{message}</tool_use_error>",
         data={"code": str(validation.code or "validation_failed"), "tool": str(invocation.name or "")},
+        executed=False,
     )
 
 
@@ -222,6 +225,7 @@ def result_to_envelope(*, invocation: ToolInvocation, result: Any) -> ToolResult
             status="error",
             model_feedback="<tool_use_error>工具执行没有返回结果。</tool_use_error>",
             data={"code": "empty_result", "tool": str(invocation.name or "")},
+            executed=True,
         )
     feedback = str(_result_value(result, "followup_context", "") or "").strip()
     updates = _result_value(result, "state_updates", {})
@@ -274,9 +278,11 @@ def result_to_envelope(*, invocation: ToolInvocation, result: Any) -> ToolResult
             ),
         },
         events=[dict(item) for item in list(events or []) if isinstance(item, Mapping)],
+        executed=True,
     )
 
 
+@timed('tool')
 def execute_invocation(
     invocation: ToolInvocation,
     *,
@@ -311,5 +317,6 @@ def execute_invocation(
                 "tool": tool_name,
                 "error_type": type(exc).__name__,
             },
+            executed=True,
         )
     return result, result_to_envelope(invocation=invocation, result=result)

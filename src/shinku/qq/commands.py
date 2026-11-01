@@ -92,12 +92,6 @@ class SlashCommand:
     argument_text: str
     raw_text: str
 
-    def arg(self, index: int = 0, default: str = "") -> str:
-        try:
-            return self.args[index]
-        except IndexError:
-            return default
-
 
 def parse_slash_command(value: Any) -> SlashCommand | None:
     """Parse a slash command without prefix or substring matching.
@@ -432,7 +426,6 @@ class QQCommandInterpreter:
             return CommandOutcome(status="forbidden", reason="slash_command_forbidden", quiet=True)
         name = command.name
         args = [str(item).strip() for item in command.args if str(item).strip()]
-        action = args[0].casefold() if args else "status"
 
         if name in {"help", "h", "?", "unknown"}:
             return CommandOutcome(reply=self.help_text(), status="help")
@@ -748,6 +741,11 @@ class QQCommandInterpreter:
             mode = aliases.get(args[1].casefold())
         if mode is None or not self.state.set_reply_mode(mode):
             return CommandOutcome(reply="回复模式只能是 text、voice、both 或 auto。", status="invalid_reply_mode")
+        if mode in {"voice", "both"}:
+            return CommandOutcome(
+                reply="已切到语音跟随模式：先发文字，再单独发送语音；引用只放在文字上。语音不可用时保留文字。",
+                status="reply_mode_changed",
+            )
         if mode != "text":
             return CommandOutcome(
                 reply=f"已切换回复模式：{mode}。本机语音服务未配置或不可用时仍会发文字。",
@@ -839,6 +837,7 @@ class QQCommandInterpreter:
             "/onlooker on/off/status\n"
             "/stop、/start\n"
             "/agent on/off/status、/agent tasks、/agent status task-id、/agent permission traditional|readonly|confirm|full|ultra、/agent cancel|retry task-id\n"
+            "/agent budget task-id；/agent resume task-id standard|heavy（追加一份额度并续接预算暂停的任务）\n"
             "/reply mode text|voice|both|auto\n"
             "/model、/provider、/character\n"
             "/memory recent|retrieve|summary [内容]（/timeline 为摘要别名）\n"

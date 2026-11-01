@@ -7,10 +7,12 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 
 from .lifecycle_policy import LifecyclePolicy
+from .projection.contracts import ProjectionPolicy
 
 __all__ = ["MemoryPolicy"]
 
@@ -51,6 +53,18 @@ def _id_tuple(env: Mapping[str, str], key: str) -> tuple[str, ...]:
     return tuple(result[:32])
 
 
+def _participant_labels(env: Mapping[str, str]) -> dict[str, str]:
+    """本机标签只帮助检索，不作为参与者身份或权限凭证。"""
+    try:
+        value = json.loads(env.get("SHINKU_MEMORY_OWNER_PARTICIPANT_LABELS", "{}"))
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(key)[:64]: label.strip()[:64] for key, label in list(value.items())[:32]
+            if isinstance(label, str) and label.strip()}
+
+
 @dataclass(frozen=True)
 class MemoryPolicy:
     """一轮记忆处理使用的边界参数。"""
@@ -81,6 +95,11 @@ class MemoryPolicy:
     # The private owner memory is opt-in and only accepts these QQ identities.
     # It is deliberately separate from the command-authorisation list.
     master_user_ids: tuple[str, ...] = ()
+    # 可收录到私用库的参与者，仅允许写入署名经历，不赋予主人读写指令权限。
+    owner_participant_ids: tuple[str, ...] = ()
+    owner_participant_labels: Mapping[str, str] = field(default_factory=dict)
+    # 主人桌面/私聊共享的自动承接时间窗；0 关闭，过期仍允许显式历史检索。
+    owner_continuity_seconds: int = 300
     # Semantic retrieval is opt-in in the public runtime and enabled by the
     # private profile.  The heavyweight model remains an optional dependency.
     semantic_enabled: bool = False
@@ -101,11 +120,14 @@ class MemoryPolicy:
     workbench_ttl_seconds: int = 300
     workbench_max_entries: int = 128
     lifecycle: LifecyclePolicy = field(default_factory=LifecyclePolicy)
+    projection: ProjectionPolicy = field(default_factory=ProjectionPolicy)
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> "MemoryPolicy":
         env = os.environ if environ is None else environ
         return cls(
+            owner_continuity_seconds=_int_value(env, "SHINKU_MEMORY_OWNER_CONTINUITY_SECONDS", 300, minimum=0, maximum=1800),
+            projection=ProjectionPolicy.from_environment(env),
             lifecycle=LifecyclePolicy.from_environment(env),
             event_ttl_seconds=_int_value(env, "SHINKU_MEMORY_EVENT_TTL_SECONDS", 30 * 86400, minimum=0, maximum=10 * 365 * 86400),
             retrieval_limit=_int_value(env, "SHINKU_MEMORY_RETRIEVAL_LIMIT", 5, minimum=1, maximum=50),
@@ -135,6 +157,8 @@ class MemoryPolicy:
                 env, "SHINKU_MEMORY_AGENT_TASK_DETAIL_MAX_STEPS", 32, minimum=1, maximum=256
             ),
             master_user_ids=_id_tuple(env, "SHINKU_MEMORY_MASTER_USER_IDS"),
+            owner_participant_ids=_id_tuple(env, "SHINKU_MEMORY_OWNER_PARTICIPANT_IDS"),
+            owner_participant_labels=_participant_labels(env),
             semantic_enabled=_flag(env, "SHINKU_MEMORY_SEMANTIC_ENABLED", False),
             semantic_provider=str(env.get("SHINKU_MEMORY_SEMANTIC_PROVIDER", "huggingface") or "huggingface").strip().lower() or "huggingface",
             embedding_model=str(env.get("SHINKU_MEMORY_EMBEDDING_MODEL", "BAAI/bge-m3") or "BAAI/bge-m3").strip() or "BAAI/bge-m3",

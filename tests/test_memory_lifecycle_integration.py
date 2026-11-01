@@ -294,19 +294,21 @@ def test_foreign_quote_or_at_owner_never_grants_write_to_owner_library(tmp_path)
     assert service.store.search(query="红茶", scope="group:group", now=T0)
 
 
-def test_deferred_l1_old_vectors_require_grace_and_scoped_approval(tmp_path):
+def test_deferred_l1_vectors_live_with_source_and_forget_still_removes_them(tmp_path):
     service, clock, record = service_for(tmp_path / "m.sqlite3", provider=Provider())
     store = service.store
     assert store.backfill_embeddings() == 1
     store.configure_lifecycle(replace(store.lifecycle.policy, defer_l1_embeddings=True))
-    # Policy change starts grace; no old vector is removed on the first scan.
+    # 延期只影响前台生成；即使过宽限且批准扫描，也不能独立删掉仍保留原文的索引。
     store.lifecycle.scan(now=T0, scope=record.scope)
     assert store.semantic_status()["vectors"] == 1
     clock[0] += store.lifecycle.policy.migration_grace_seconds + 1
     preview = store.lifecycle.scan(now=clock[0], scope=record.scope)
-    assert any(row["action"] == "reclaim_l1_vectors" and not row["applied"] for row in preview["actions"])
+    assert not any(row["action"] == "reclaim_l1_vectors" for row in preview["actions"])
     assert store.semantic_status()["vectors"] == 1
     result = store.lifecycle.scan(now=clock[0], scope=record.scope, allow_reclaim=True, approved_scope=record.scope)
-    assert result["logical_vector_bytes_reclaimed"] == 8
-    assert store.semantic_status()["vectors"] == 0
+    assert result["logical_vector_bytes_reclaimed"] == 0
+    assert store.semantic_status()["vectors"] == 1
     assert store.event_by_source_id(source_id=record.source_id, scope=record.scope).text == TEXT
+    store.forget(query="", scope=record.scope, record_id=record.record_id, now=clock[0])
+    assert store.semantic_status()["vectors"] == 0

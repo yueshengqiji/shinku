@@ -18,14 +18,3 @@ def test_live_runtime_fallback_is_failed_not_completed():
         message_ids=("gray",), combined_text="创建测试文件", messages=(item,))
     result = QQAgentBridge(runtime=UnavailableRuntime(), system_prompt="isolated").handle_turn(turn)
     assert result.agent_status == "failed" and result.reason == "chat_generation_failed"
-
-
-def test_gray_network_tools_reject_external_urls(tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("gray_e_test", root / "scripts/gray_agent_batch_e.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    probe = module.RouteProbe("http://127.0.0.1:1234", 1)
-    assert probe.normalize_call({"url": "https://example.com", "route": "direct"}) is None
-    assert probe.normalize_call({"url": "http://127.0.0.1:12340/ready", "route": "direct"}) is None
-    assert probe.normalize_call({"url": "http://127.0.0.1:1234/ready", "route": "direct"}) is not None

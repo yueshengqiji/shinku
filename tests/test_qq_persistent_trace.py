@@ -9,7 +9,7 @@ from shinku.qq.trace import TurnTraceStore
 
 
 def turn(message="m-1", text="private conversation must not be logged"):
-    return SimpleNamespace(conversation_type="group", conversation_id="872732158",
+    return SimpleNamespace(conversation_type="group", conversation_id="100002",
                            primary_message_id=message, message_ids=(message,), combined_text=text)
 
 

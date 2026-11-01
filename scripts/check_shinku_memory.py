@@ -16,7 +16,7 @@ from shinku.memory import MemoryRouter, MemoryService, MemoryStore  # noqa: E402
 def main() -> int:
     parser = argparse.ArgumentParser(description="检查独立版记忆路由与作用域")
     parser.add_argument("database", type=Path)
-    parser.add_argument("--conversation-id", default="872732158")
+    parser.add_argument("--conversation-id", default="100002")
     parser.add_argument("--conversation-type", default="group")
     args = parser.parse_args()
 

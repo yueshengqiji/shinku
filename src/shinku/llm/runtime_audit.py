@@ -71,6 +71,7 @@ class RuntimeAuditMixin:
                 "request_id": request_id,
                 "path": path,
                 "channel": record.get("channel", "aux"),
+                "model": record.get("model", ""),
                 "estimated_input": (
                     record.get("after", {}).get("total", 0)
                     if record.get("mode") == "enforce" and status == "trimmed_history"
@@ -112,6 +113,11 @@ class RuntimeAuditMixin:
                 "estimated_input_tokens": context.get("estimated_input", 0),
                 **values,
             }
+            # 原指标保留兼容；成对评估使用显式 None 区分未知与实际零用量。
+            # 这里只记计数，不保存推理正文，也不把预算预留冒充供应商账单。
+            from shinku.agent_runtime.evaluation import provider_usage
+            event["provider_usage"] = provider_usage(response)
+            event["requested_model"] = context.get("model", "")
             if available and values["actual_input_tokens"] > 0:
                 event["estimate_to_actual_ratio"] = round(
                     int(context.get("estimated_input") or 0) / values["actual_input_tokens"], 3

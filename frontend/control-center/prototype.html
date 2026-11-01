@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>真红 / 控制中枢</title>
+  <style>
+    /* 原型常驻深黑；结构边界统一使用灰线，黄色只强调选择、焦点与执行进展。 */
+    :root {
+      color-scheme: dark;
+      --bg: #080808;
+      --panel: #0d0d0d;
+      --hover: #181818;
+      --line: #353535;
+      --line-soft: #242424;
+      --text: #dedede;
+      --muted: #929292;
+      --yellow: #e3c54a;
+      --logo: #982c36;
+      --sidebar: 176px;
+      --header: 67px;
+      --row-pad: 15px;
+    }
+    * { box-sizing: border-box; border-radius: 0 !important; }
+    [hidden] { display: none !important; }
+    /* 锚点偏移只在区块上定义，避免与滚动容器偏移叠加而遮错当前定位。 */
+    html { scroll-padding-top: 0; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; -webkit-font-smoothing: antialiased; }
+    button, input, select { font: inherit; color: inherit; }
+    button, select { cursor: pointer; }
+    button, input, select { border: 1px solid var(--line); background: var(--bg); }
+    button { padding: 7px 12px; }
+    button:hover { background: var(--hover); }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--yellow); outline-offset: 3px; }
+    input, select { padding: 8px 10px; min-width: 0; }
+    input::placeholder { color: #737373; }
+    a { color: inherit; text-decoration: none; }
+    h1,h2,h3,p { margin: 0; }
+    h1 { font-size: 25px; line-height: 1.4; font-weight: 600; letter-spacing: .5px; }
+    h2 { font-size: 17px; font-weight: 600; }
+    h3 { font-size: 13px; font-weight: 600; }
+    svg { display: block; }
+    .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: square; stroke-linejoin: miter; flex: none; }
+    .mono { font-family: ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .subtle { color: #747474; }
+    .yellow { color: var(--yellow); }
+    .square { display: inline-block; width: 5px; height: 5px; background: currentColor; flex: none; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border: 1px solid var(--line); color: #b4b4b4; font-size: 10px; white-space: nowrap; font-weight: 400; }
+    .tag.current { color: var(--yellow); }
+    .action { display: inline-flex; gap: 7px; align-items: center; justify-content: center; white-space: nowrap; font-size: 12px; }
+    .action .icon { width: 14px; height: 14px; }
+    .primary, .selected { color: #0b0b0b; background: var(--yellow); border-color: var(--line); }
+    .primary:hover, .selected:hover { background: #f0d361; }
+    .link-button { background: none; border: 0; padding: 2px 0; color: #b9b9b9; font-size: 11px; white-space: nowrap; }
+    .link-button:hover { color: var(--yellow); background: none; }
+
+    /* 固定顶栏承载所有设置；左侧仅包含连续页面的锚点，不承担视图路由。 */
+    .topbar { position: fixed; inset: 0 0 auto; z-index: 40; height: var(--header); border-bottom: 1px solid var(--line); background: var(--bg); display: flex; align-items: stretch; }
+    .brand { width: var(--sidebar); padding: 0 21px; flex: none; display: flex; align-items: center; border-right: 1px solid var(--line); }
+    .brand-name { color: var(--logo); font-size: 26px; line-height: 1; font-weight: 800; letter-spacing: 1px; }
+    .brand-meta { margin-left: 10px; border-left: 1px solid var(--line); padding-left: 10px; color: #878787; font-size: 9px; letter-spacing: 1px; line-height: 1.65; }
+    .topbar-inner { flex: 1; min-width: 0; display: flex; align-items: center; gap: 22px; padding: 0 29px; }
+    .product-title { font-size: 12px; letter-spacing: 1px; white-space: nowrap; }
+    .demo-label { font-size: 9px; border: 1px solid var(--line); padding: 1px 5px; color: var(--muted); margin-left: 8px; letter-spacing: 0; }
+    .top-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .top-tools .action { padding: 7px 10px; font-size: 11px; }
+    .top-search { position: relative; display: flex; align-items: center; width: 170px; margin-right: 7px; }
+    .top-search input { width: 100%; padding: 7px 28px 7px 10px; font-size: 11px; }
+    .top-search kbd { position: absolute; right: 10px; font: 11px ui-monospace,monospace; color: #686868; }
+    .sidebar { position: fixed; left: 0; top: var(--header); bottom: 0; width: var(--sidebar); background: var(--bg); border-right: 1px solid var(--line); padding: 27px 14px 19px; z-index: 30; display: flex; flex-direction: column; }
+    .sidebar-title { margin: 0 9px 15px; color: #747474; font-size: 10px; letter-spacing: 2px; }
+    .section-nav { display: grid; gap: 5px; }
+    .section-nav a { padding: 10px 9px; display: flex; gap: 13px; align-items: center; color: #9a9a9a; font-size: 12px; border: 1px solid transparent; }
+    .section-nav a:hover { color: #e2e2e2; background: var(--hover); }
+    .section-nav a.active { color: #090909; background: var(--yellow); border-color: var(--line); }
+    .section-nav .num { font-size: 10px; opacity: .6; }
+    .sidebar-bottom { margin-top: auto; padding: 18px 9px 0; color: #737373; font-size: 10px; border-top: 1px solid var(--line-soft); }
+    .read-position { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .read-track { height: 2px; background: var(--line); margin-bottom: 17px; }
+    .read-track span { display: block; width: 0; height: 100%; background: var(--yellow); }
+    .sidebar-bottom p { line-height: 1.9; font-size: 9px; }
+    .main { margin-left: var(--sidebar); padding: calc(var(--header) + 29px) 29px 28px; max-width: 1700px; }
+    .section { scroll-margin-top: calc(var(--header) + 26px); min-width: 0; margin-bottom: 43px; }
+    .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 17px; }
+    .section-heading .heading-main { display: flex; align-items: baseline; gap: 11px; }
+    .section-number { font-size: 11px; color: #747474; }
+    .section-caption { color: var(--muted); font-size: 11px; margin-top: 6px; }
+    .heading-meta { color: #7d7d7d; font-size: 10px; white-space: nowrap; text-align: right; }
+    .section:not(:first-child) { padding-top: 20px; border-top: 1px solid var(--line); }
+    .overview-top { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding: 12px 15px; border: 1px solid var(--line); font-size: 11px; background: var(--panel); }
+    .overview-top .divider { width: 1px; height: 12px; background: var(--line); }
+    .overview-top .state { display: inline-flex; align-items: center; gap: 7px; }
+    .overview-top .spacer { flex: 1; }
+    .metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border: 1px solid var(--line); border-top: 0; }
+    .metric { padding: 18px 19px; border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric-label { color: var(--muted); font-size: 11px; }
+    .metric-value { font-size: 30px; font-weight: 500; line-height: 1.2; margin: 10px 0 8px; letter-spacing: -1px; }
+    .metric-value small { font-size: 12px; letter-spacing: 0; color: var(--muted); margin-left: 6px; font-weight: 400; }
+    .metric-foot { font-size: 10px; color: #858585; }
+    .runtime-line { display: flex; flex-wrap: wrap; gap: 10px 26px; padding: 12px 0 0; color: #9a9a9a; font-size: 11px; }
+    .runtime-line strong { font-weight: 400; color: #cecece; margin-left: 8px; }
+    .toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 12px; }
+    .filter-group { display: flex; }
+    .filter-group button { font-size: 11px; padding: 5px 13px; margin-right: -1px; }
+    .filter-group button[aria-pressed=true] { color: #090909; background: var(--yellow); }
+    .toolbar-search { width: 225px; padding: 6px 10px; font-size: 11px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+    th { font-size: 10px; font-weight: 400; color: #888; letter-spacing: .2px; background: var(--panel); white-space: nowrap; }
+    th,td { padding: var(--row-pad) 15px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    th { padding-top: 10px; padding-bottom: 10px; }
+    tbody tr:last-child>td { border-bottom: 0; }
+    tbody tr.record:hover { background: #101010; }
+    tr.record.is-open { background: #16150d; }
+    tr.record.is-open>td:first-child { box-shadow: inset 2px 0 var(--yellow); }
+    .nowrap { white-space: nowrap; }
+    .time-cell { color: #999; width: 85px; font-size: 11px; }
+    .channel-cell { width: 91px; color: #a5a5a5; font-size: 11px; }
+    .record-title { display: block; color: #d3d3d3; line-height: 1.65; }
+    .record-summary { display: block; color: #808080; font-size: 11px; margin-top: 3px; line-height: 1.75; }
+    .record-caption { font-size: 10px; color: #737373; margin-top: 5px; }
+    .table-footer { display: flex; justify-content: space-between; gap: 14px; padding: 10px 0 0; font-size: 10px; color: #7d7d7d; }
+    .empty-row { text-align: center; padding: 28px; color: var(--muted); }
+    .detail-row>td { background: #101010; padding: 20px; }
+    .reply-detail { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(220px,1fr); gap: 27px; }
+    .detail-label { font-size: 10px; color: #828282; margin-bottom: 8px; }
+    .detail-message { margin-bottom: 17px; }
+    .detail-message:last-child { margin-bottom: 0; }
+    .detail-message p { color: #bfbfbf; font-size: 12px; line-height: 1.9; }
+    .trace { display: grid; gap: 0; border: 1px solid var(--line); }
+    .trace-step { display: grid; grid-template-columns: 22px 1fr auto; align-items: baseline; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--line); font-size: 11px; }
+    .trace-step:last-child { border-bottom: 0; }
+    .trace-step .step-index { color: #747474; font-size: 9px; }
+    .trace-step small { color: #888; font-size: 9px; }
+    .trace-step p { grid-column: 2/-1; color: #8d8d8d; font-size: 10px; }
+    .task-progress { display: flex; gap: 3px; margin: 6px 0 3px; }
+    .task-progress span { width: 32px; height: 3px; background: #3d3d3d; }
+    .task-progress .done { background: #b6b6b6; }
+    .task-progress .running { background: var(--yellow); }
+    .task-detail { padding: 20px; border: 1px solid var(--line); border-top: 0; background: #101010; }
+    .task-detail-head { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 15px; }
+    .task-detail-head .link-button { color: #999; }
+    .task-stages { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); border: 1px solid var(--line); }
+    .task-stage { padding: 14px; border-right: 1px solid var(--line); }
+    .task-stage:last-child { border-right: 0; }
+    .task-stage small { color: #8a8a8a; font-size: 10px; }
+    .task-stage b { display: block; font-weight: 400; font-size: 12px; margin: 6px 0; }
+    .task-stage p { font-size: 11px; color: #888; }
+    .task-detail-note { color: #a3a3a3; margin-top: 14px; font-size: 11px; }
+    .memory-source { color: #888; font-size: 10px; }
+    .stats-inline { display: flex; gap: 24px; color: #929292; font-size: 11px; margin: 0 0 14px; }
+    .stats-inline b { color: #d2d2d2; font-weight: 400; margin-left: 7px; }
+    .system-grid { display: grid; grid-template-columns: minmax(220px,1fr) minmax(0,2fr); gap: 20px; }
+    .system-summary { border: 1px solid var(--line); padding: 4px 15px; }
+    .system-pair { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line-soft); padding: 12px 0; font-size: 11px; }
+    .system-pair:last-child { border-bottom: 0; }
+    .system-pair dt { color: #8d8d8d; }
+    .system-pair dd { margin: 0; }
+    .logs { border: 1px solid var(--line); overflow-x: auto; font-size: 11px; }
+    .log-line { display: grid; grid-template-columns: 67px 38px minmax(80px,1fr) minmax(130px,2.3fr); gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--line-soft); }
+    .log-line:last-child { border-bottom: 0; }
+    .log-time,.log-level { color: #757575; }
+    .log-module { color: #a0a0a0; }
+    .log-message { color: #bcbcbc; }
+    .footer { border-top: 1px solid var(--line); padding-top: 14px; display: flex; justify-content: space-between; gap: 15px; color: #747474; font-size: 10px; }
+    .search-match { outline: 1px solid var(--yellow); outline-offset: -1px; background: #19170e !important; }
+
+    /* 设置与展示状态仅保存在本页内存中；这里没有网络写操作或运行配置落盘。 */
+    dialog { background: #0c0c0c; color: var(--text); border: 1px solid #555; padding: 0; width: 600px; max-width: calc(100vw - 30px); max-height: calc(100dvh - 36px); }
+    dialog::backdrop { background: #000b; }
+    .dialog-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); padding: 17px 20px; }
+    .dialog-header h2 { font-size: 16px; }
+    .dialog-close { padding: 4px; border: 0; }
+    .dialog-tabs { display: flex; border-bottom: 1px solid var(--line); }
+    .dialog-tabs button { padding: 10px 20px; border: 0; border-right: 1px solid var(--line); color: #999; font-size: 12px; }
+    .dialog-tabs button[aria-pressed=true] { background: var(--yellow); color: #080808; }
+    .dialog-body { padding: 22px; }
+    .dialog-note { font-size: 11px; color: #939393; margin-bottom: 20px; }
+    .form-field { display: grid; gap: 7px; margin-bottom: 18px; }
+    .form-field span { font-size: 11px; color: #a0a0a0; }
+    .form-field input,.form-field select { width: 100%; font-size: 12px; }
+    .form-field small { color: #777; font-size: 10px; }
+    .setting-line { display: flex; justify-content: space-between; gap: 18px; align-items: center; border-bottom: 1px solid var(--line-soft); padding: 15px 0; }
+    .setting-line:first-child { padding-top: 0; }
+    .setting-line:last-child { border-bottom: 0; }
+    .setting-line p { font-size: 11px; color: #8d8d8d; margin-top: 4px; }
+    .setting-line input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--yellow); flex: none; }
+    .setting-line select { max-width: 180px; font-size: 11px; }
+    .dialog-footer { border-top: 1px solid var(--line); padding: 14px 22px; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+    .dialog-footer span { font-size: 10px; color: #8a8a8a; }
+    .toast { position: fixed; bottom: 25px; left: calc(50% + var(--sidebar)/2); transform: translateX(-50%); background: #131313; border: 1px solid #626262; padding: 10px 18px; color: var(--text); font-size: 12px; z-index: 100; max-width: calc(100vw - 26px); }
+    body.compact { --row-pad: 9px; }
+    body.hide-summaries .record-summary,body.hide-summaries .section-caption { display: none; }
+    @media (min-width:1600px) { .main { padding-left: 40px; padding-right: 40px; } }
+    @media (max-width:1150px) {
+      :root { --sidebar: 158px; }
+      .brand { padding: 0 16px; }
+      .brand-name { font-size: 24px; }
+      .brand-meta { font-size: 8px; margin-left: 8px; padding-left: 8px; }
+      .topbar-inner { gap: 12px; padding: 0 23px; }
+      .top-search { width: 140px; }
+      .main { padding-left: 23px; padding-right: 23px; }
+      .product-title { font-size: 11px; }
+      .demo-label { margin-left: 5px; }
+      .top-tools { gap: 6px; }
+      .top-tools .action { padding: 7px 8px; }
+      .section-nav a { gap: 10px; }
+      th,td { padding-left: 12px; padding-right: 12px; }
+    }
+    @media (max-width:950px) {
+      .product-title { display: none; }
+      .top-tools { width: 100%; }
+      .top-search { margin-right: auto; width: 175px; }
+      .metric { padding: 15px; }
+      .metric-value { font-size: 27px; }
+      .reply-detail { grid-template-columns: 1fr; gap: 20px; }
+      .system-grid { grid-template-columns: 1fr; }
+      .system-summary { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
+      .table-wrap table { min-width: 560px; }
+    }
+    @media (max-width:700px) {
+      :root { --sidebar: 0px; --header: 117px; }
+      .topbar { height: 117px; display: block; }
+      .brand { width: auto; height: 52px; border: 0; padding: 0 16px; }
+      .brand-name { font-size: 24px; }
+      .brand-meta { font-size: 9px; }
+      .topbar-inner { padding: 0 16px; height: 51px; }
+      .top-tools { gap: 6px; }
+      .top-search { width: auto; min-width: 65px; flex: 1; margin-right: 2px; }
+      .top-search input { font-size: 11px; padding-left: 8px; }
+      .top-search kbd { display: none; }
+      .top-tools .action { font-size: 10px; padding: 7px 8px; }
+      .top-tools .action .icon { display: none; }
+      .sidebar { top: var(--header); bottom: auto; width: 100%; height: 46px; padding: 0 12px; border-right: 0; border-bottom: 1px solid var(--line); overflow: auto; scrollbar-width: none; }
+      .sidebar-title,.sidebar-bottom { display: none; }
+      .section-nav { display: flex; height: 45px; align-items: center; gap: 5px; }
+      .section-nav a { padding: 5px 9px; white-space: nowrap; gap: 7px; font-size: 10px; }
+      .section-nav .num { font-size: 8px; }
+      .main { margin-left: 0; padding: 187px 16px 24px; }
+      .section { scroll-margin-top: 184px; margin-bottom: 31px; }
+      .section-heading { gap: 10px; align-items: flex-start; }
+      h1 { font-size: 22px; }
+      h2 { font-size: 16px; }
+      .heading-meta { font-size: 9px; }
+      .heading-main { gap: 8px !important; }
+      .section-number { font-size: 10px; }
+      .overview-top { padding: 11px 12px; gap: 8px 13px; font-size: 10px; }
+      .overview-top .divider,.overview-top .spacer,.overview-top .overview-uptime { display: none; }
+      .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .metric { padding: 16px; }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .metric-value { font-size: 29px; }
+      .runtime-line { font-size: 10px; gap: 6px 18px; }
+      .section-caption { font-size: 10px; }
+      .toolbar { align-items: stretch; }
+      .toolbar-search { width: 100%; }
+      .table-wrap table { min-width: 640px; }
+      .filter-group button { padding: 5px 14px; font-size: 10px; }
+      .table-footer { font-size: 9px; }
+      .task-stages { grid-template-columns: 1fr; }
+      .task-stage { border-right: 0; border-bottom: 1px solid var(--line); }
+      .task-stage:last-child { border-bottom: 0; }
+      .stats-inline { gap: 17px; font-size: 10px; }
+      .footer { flex-direction: column; gap: 4px; font-size: 9px; }
+      .dialog-tabs button { padding: 10px 14px; font-size: 11px; }
+      .dialog-body { padding: 18px; }
+      .dialog-footer { padding: 14px 18px; }
+      .log-line { min-width: 570px; }
+      .toast { left: 50%; width: max-content; font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="真红，定位到运行概览">
+      <span class="brand-name">真红</span><span class="brand-meta">SHINKU<br>CONTROL</span>
+    </a>
+    <div class="topbar-inner">
+      <div class="product-title">控制中枢<span class="demo-label">原型 / 02</span></div>
+      <div class="top-tools">
+        <form class="top-search" id="page-search"><input id="global-search" placeholder="查找记录…" aria-label="查找页面记录" autocomplete="off"><kbd>/</kbd></form>
+        <button class="action" data-settings="model"><span data-icon="model"></span>模型配置</button>
+        <button class="action" data-settings="permissions"><span data-icon="lock"></span>权限设置</button>
+        <button class="action" data-settings="display"><span data-icon="settings"></span>界面设置</button>
+      </div>
+    </div>
+  </header>
+  <aside class="sidebar" aria-label="快速滚动定位">
+    <div class="sidebar-title">快速定位</div>
+    <nav class="section-nav">
+      <a href="#overview" class="active" aria-current="location"><span class="num mono">01</span>运行概览</a>
+      <a href="#conversations"><span class="num mono">02</span>会话与回复</a>
+      <a href="#tasks"><span class="num mono">03</span>后台任务</a>
+      <a href="#memory"><span class="num mono">04</span>记忆记录</a>
+      <a href="#calls"><span class="num mono">05</span>模型调用</a>
+      <a href="#system"><span class="num mono">06</span>系统日志</a>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="read-position"><span>当前位置</span><span class="mono" id="position-label">01 / 06</span></div>
+      <div class="read-track"><span id="read-progress"></span></div>
+      <p>本地界面原型<br>所有数据均为演示</p>
+    </div>
+  </aside>
+  <main class="main">
+    <section class="section" id="overview" aria-labelledby="overview-title">
+      <div class="section-heading">
+        <div><div class="heading-main"><span class="section-number mono">01</span><h1 id="overview-title">运行概览</h1></div><p class="section-caption">服务状态、消息处理与当前任务</p></div>
+        <div class="heading-meta">演示快照<span class="mono" style="display:block;margin-top:4px">2026-10-16 22:42:18</span></div>
+      </div>
+      <div class="overview-top">
+        <span class="state"><i class="square"></i>后端正常</span><span class="divider"></span>
+        <span>消息发送 <b style="font-weight:400" id="summary-reply">已开启</b></span><span class="divider"></span>
+        <span>待授权 <span class="mono">0</span></span><span class="divider"></span>
+        <span>异常 <span class="mono">0</span></span><span class="spacer"></span><span class="overview-uptime muted">运行时长 <span class="mono">03:24:16</span></span>
+      </div>
+      <div class="metrics">
+        <article class="metric"><div class="metric-label">今日回复</div><div class="metric-value mono">128<small>次</small></div><div class="metric-foot">已送达 128 / 失败 0</div></article>
+        <article class="metric"><div class="metric-label">运行任务</div><div class="metric-value mono">01<small>个</small></div><div class="metric-foot">整理本周的阅读笔记</div></article>
+        <article class="metric"><div class="metric-label">平均回复耗时</div><div class="metric-value mono">2.4<small>s</small></div><div class="metric-foot">普通对话，不含后台任务</div></article>
+        <article class="metric"><div class="metric-label">今日模型用量</div><div class="metric-value mono">42.8<small>k tokens</small></div><div class="metric-foot">输入 36.2k / 输出 6.6k</div></article>
+      </div>
+      <div class="runtime-line"><span>当前模型<strong id="summary-model">Gemini / 示例模型</strong></span><span>QQ 通道<strong>已连接</strong></span><span>记忆检索<strong id="summary-memory">可用</strong></span><span>桌宠<strong class="muted">未启动</strong></span></div>
+    </section>
+
+    <section class="section" id="conversations" aria-labelledby="conversations-title">
+      <div class="section-heading"><div class="heading-main"><span class="section-number mono">02</span><h2 id="conversations-title">会话与回复</h2></div><span class="heading-meta">最新 4 条 / 点击展开处理详情</span></div>
+      <div class="toolbar">
+        <div class="filter-group" aria-label="回复渠道筛选"><button data-channel="all" aria-pressed="true">全部</button><button data-channel="private" aria-pressed="false">私聊</button><button data-channel="group" aria-pressed="false">群聊</button><button data-channel="desktop" aria-pressed="false">桌面</button></div>
+        <input class="toolbar-search" id="reply-search" aria-label="筛选回复内容" placeholder="筛选内容或会话…">
+      </div>
+      <div class="table-wrap"><table aria-label="回复记录"><thead><tr><th>时间</th><th>来源</th><th>输入 / 回复摘要</th><th>耗时</th><th>投递</th><th></th></tr></thead><tbody id="reply-rows"></tbody></table></div>
+      <div class="table-footer"><span id="reply-count">显示 4 条</span><span>生成状态和投递回执分别记录</span></div>
+    </section>
+
+    <section class="section" id="tasks" aria-labelledby="tasks-title">
+      <div class="section-heading"><div class="heading-main"><span class="section-number mono">03</span><h2 id="tasks-title">后台任务</h2></div><span class="heading-meta">运行中 1 / 已完成 1</span></div>
+      <div class="table-wrap"><table aria-label="后台任务记录"><thead><tr><th>任务</th><th>来源</th><th>状态</th><th>执行进展</th><th>最近更新</th><th></th></tr></thead><tbody>
+        <tr class="record" data-searchable><td><span class="record-title">整理本周的阅读笔记</span><span class="record-caption mono">TASK-001</span></td><td class="channel-cell">桌面会话</td><td><span class="tag current">进行中</span></td><td><span style="font-size:11px">生成笔记并检查完整性</span><div class="task-progress"><span class="done"></span><span class="done"></span><span class="running"></span></div><small class="subtle mono">2 / 3 步已完成</small></td><td class="nowrap mono muted" style="font-size:11px">22:42:00</td><td><button class="link-button" data-task="reading" aria-expanded="false" aria-controls="task-detail">展开 ↗</button></td></tr>
+        <tr class="record" data-searchable><td><span class="record-title">汇总项目待办</span><span class="record-caption mono">TASK-002</span></td><td class="channel-cell">私聊</td><td><span class="tag">已完成</span></td><td><span style="font-size:11px">已核验结果并送达</span><div class="task-progress"><span class="done"></span><span class="done"></span><span class="done"></span></div><small class="subtle mono">3 / 3 步已完成</small></td><td class="nowrap mono muted" style="font-size:11px">21:50:32</td><td><button class="link-button" data-task="todo" aria-expanded="false" aria-controls="task-detail">展开 ↗</button></td></tr>
+      </tbody></table></div>
+      <div class="task-detail" id="task-detail" hidden></div>
+      <div class="table-footer"><span>任务结果通过核验后才标记完成</span><span>共 2 条示例</span></div>
+    </section>
+
+    <section class="section" id="memory" aria-labelledby="memory-title">
+      <div class="section-heading"><div class="heading-main"><span class="section-number mono">04</span><h2 id="memory-title">记忆记录</h2></div><span class="heading-meta">近期新增记录</span></div>
+      <div class="stats-inline"><span>今日新增<b class="mono">12</b></span><span>本页展示<b class="mono">3</b></span><span>检索状态<b id="memory-state">可用</b></span></div>
+      <div class="table-wrap"><table aria-label="记忆记录"><thead><tr><th>记录时间</th><th>类型</th><th>内容</th><th>来源</th></tr></thead><tbody>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:38:12</td><td class="channel-cell">偏好</td><td>阅读笔记按主题整理，保留原始资料链接。<div class="record-caption">用户明确表达</div></td><td class="memory-source nowrap">桌面会话</td></tr>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:38:02</td><td class="channel-cell">近期事项</td><td>正在整理本周的阅读材料。<div class="record-caption mono">关联 TASK-001</div></td><td class="memory-source nowrap">任务记录</td></tr>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">21:46:30</td><td class="channel-cell">约定</td><td>汇总结果先给简短概览，再展开细节。<div class="record-caption">用户明确表达</div></td><td class="memory-source nowrap">私聊</td></tr>
+      </tbody></table></div>
+      <div class="table-footer"><span>记忆保留来源；本轮实际引用可在回复详情中查看</span><span>合成数据</span></div>
+    </section>
+
+    <section class="section" id="calls" aria-labelledby="calls-title">
+      <div class="section-heading"><div class="heading-main"><span class="section-number mono">05</span><h2 id="calls-title">模型调用</h2></div><button class="link-button" data-settings="model">打开模型配置 ↗</button></div>
+      <div class="table-wrap"><table aria-label="模型调用记录"><thead><tr><th>时间</th><th>模型</th><th>用途</th><th>输入 Token</th><th>输出 Token</th><th>耗时</th><th>结果</th></tr></thead><tbody>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:42:16</td><td>Gemini / 示例</td><td class="muted">私聊回复</td><td class="mono">1,240</td><td class="mono">186</td><td class="mono nowrap">2.1 s</td><td><span class="tag">完成</span></td></tr>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:40:28</td><td>Gemini / 示例</td><td class="muted">任务归纳</td><td class="mono">4,812</td><td class="mono">962</td><td class="mono nowrap">6.4 s</td><td><span class="tag">完成</span></td></tr>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:38:01</td><td>Gemini / 示例</td><td class="muted">桌面回复</td><td class="mono">980</td><td class="mono">124</td><td class="mono nowrap">1.6 s</td><td><span class="tag">完成</span></td></tr>
+        <tr class="record" data-searchable><td class="time-cell nowrap mono">22:36:14</td><td>Gemini / 示例</td><td class="muted">群聊回复</td><td class="mono">2,046</td><td class="mono">328</td><td class="mono nowrap">2.8 s</td><td><span class="tag">完成</span></td></tr>
+      </tbody></table></div>
+      <div class="table-footer"><span>用量按供应方返回值记录，缺失字段显示为未知</span><span>最新 4 条示例</span></div>
+    </section>
+
+    <section class="section" id="system" aria-labelledby="system-title">
+      <div class="section-heading"><div class="heading-main"><span class="section-number mono">06</span><h2 id="system-title">系统日志</h2></div><span class="heading-meta">服务摘要 / 最近事件</span></div>
+      <div class="system-grid">
+        <dl class="system-summary" style="margin:0"><div class="system-pair"><dt>后端</dt><dd>运行正常</dd></div><div class="system-pair"><dt>QQ 通道</dt><dd>已连接</dd></div><div class="system-pair"><dt>模型服务</dt><dd>可用</dd></div><div class="system-pair"><dt>桌面陪伴</dt><dd>未启动</dd></div><div class="system-pair"><dt>当前异常</dt><dd class="mono">0</dd></div></dl>
+        <div class="logs" aria-label="最近系统事件">
+          <div class="log-line" data-searchable><span class="log-time mono">22:42:18</span><span class="log-level mono">INFO</span><span class="log-module">消息投递</span><span class="log-message">回复送达，已收到通道回执。</span></div>
+          <div class="log-line" data-searchable><span class="log-time mono">22:42:16</span><span class="log-level mono">INFO</span><span class="log-module">对话处理</span><span class="log-message">回复生成完成，进入发送队列。</span></div>
+          <div class="log-line" data-searchable><span class="log-time mono">22:42:00</span><span class="log-level mono">INFO</span><span class="log-module">后台任务</span><span class="log-message">阅读笔记进入结果生成阶段。</span></div>
+          <div class="log-line" data-searchable><span class="log-time mono">22:40:28</span><span class="log-level mono">INFO</span><span class="log-module">模型调用</span><span class="log-message">任务归纳请求完成。</span></div>
+          <div class="log-line" data-searchable><span class="log-time mono">22:38:12</span><span class="log-level mono">INFO</span><span class="log-module">记忆写入</span><span class="log-message">保存整理偏好及会话来源。</span></div>
+          <div class="log-line" data-searchable><span class="log-time mono">22:38:02</span><span class="log-level mono">INFO</span><span class="log-module">后台任务</span><span class="log-message">创建阅读笔记整理任务。</span></div>
+        </div>
+      </div>
+    </section>
+    <footer class="footer"><span>界面原型 · 所有数据为演示数据，未连接真红服务</span><span class="mono">SHINKU CONTROL / 02</span></footer>
+  </main>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-header"><h2 id="settings-title">设置</h2><button class="dialog-close" id="settings-close" aria-label="关闭设置"><span data-icon="close"></span></button></div>
+    <div class="dialog-tabs" aria-label="设置类别"><button data-setting-tab="model" aria-pressed="true">模型配置</button><button data-setting-tab="permissions" aria-pressed="false">权限设置</button><button data-setting-tab="display" aria-pressed="false">界面设置</button></div>
+    <form id="settings-form" novalidate>
+      <div class="dialog-body">
+        <div data-setting-panel="model"><p class="dialog-note">演示配置，仅保存在当前页面。</p><label class="form-field"><span>供应方</span><select name="provider"><option>本地代理 / 示例</option><option>OpenAI 兼容服务 / 示例</option></select></label><label class="form-field"><span>对话模型</span><input name="model" value="Gemini / 示例模型" required maxlength="80"><small>仅更新本页模型名称展示，不调用模型接口。</small></label><label class="form-field"><span>服务地址</span><input name="endpoint" placeholder="未接入真实服务" maxlength="180"></label></div>
+        <div data-setting-panel="permissions" hidden><p class="dialog-note">以下开关只演示设置效果，不会更改实际权限。</p><label class="setting-line"><span>回复消息<p>在已连接的渠道中发送回复。</p></span><input type="checkbox" name="reply" checked></label><label class="setting-line"><span>任务工具<p>为执行类请求提供工具能力。</p></span><input type="checkbox" name="tools" checked></label><label class="setting-line"><span>记忆检索<p>查找与当前问题相关的历史记录。</p></span><input type="checkbox" name="memory" checked></label><label class="setting-line"><span>操作授权<p>需要授权的操作先等待确认。</p></span><select name="permission"><option>按风险确认</option><option>仅允许读取</option><option>所有工具均确认</option></select></label></div>
+        <div data-setting-panel="display" hidden><p class="dialog-note">背景固定为深黑，选中项使用黄色。</p><label class="setting-line"><span>紧凑行距<p>缩小列表行高，在屏幕中展示更多记录。</p></span><input type="checkbox" name="compact"></label><label class="setting-line"><span>显示辅助说明<p>显示回复摘要和区块说明。</p></span><input type="checkbox" name="summaries" checked></label><div class="setting-line"><span>界面配色<p>深黑背景 / 灰色边界 / 黄色选择 / 深红 Logo</p></span><span class="tag">固定</span></div></div>
+      </div>
+      <div class="dialog-footer"><span>仅应用到当前原型</span><button class="primary action" type="submit">应用设置</button></div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script>
+    // 资源与合成数据全部内嵌；本原型没有 fetch、持久化配置或真实发送操作。
+    const iconPaths = {
+      model: '<path d="M3 4h18v16H3zM7 8h4v4H7zM15 8h3M15 12h3M7 16h11"/>',
+      lock: '<path d="M5 10h14v11H5zM8 10V6a4 4 0 0 1 8 0v4M12 14v3"/>',
+      settings: '<path d="M3 6h18M3 12h18M3 18h18M8 3v6M16 9v6M10 15v6"/>',
+      close: '<path d="m5 5 14 14M5 19 19 5"/>'
+    };
+    document.querySelectorAll('[data-icon]').forEach(el => {
+      el.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[el.dataset.icon]}</svg>`;
+    });
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const replies = [
+      {id:'a',channel:'private',source:'与你的私聊',time:'22:42:16',input:'明天的事情，帮我简单梳理一下吧',reply:'好呀。我把明天要做的事按先后顺序列好了，先处理最重要的两件，其他的可以慢慢来。',duration:'2.1 s',memory:'引用 2 条近期约定'},
+      {id:'b',channel:'desktop',source:'桌面会话',time:'22:38:01',input:'这些阅读材料，就按主题帮我整理吧',reply:'收到。我已经开始收集和核对资料，整理好后会把笔记和来源一起给你。',duration:'1.6 s',memory:'引用 1 条整理偏好'},
+      {id:'c',channel:'group',source:'日常交流群',time:'22:36:14',input:'刚才提到的那个方法，可以再解释一下吗？',reply:'可以的。我把步骤和一个小例子放在一起，这样会更容易对照着理解。',duration:'2.8 s',memory:'引用当前会话的 3 条近期记录'},
+      {id:'d',channel:'private',source:'与你的私聊',time:'22:20:05',input:'今天先到这里，辛苦啦',reply:'你也辛苦啦。剩下的事我们明天再慢慢做，今晚好好休息。',duration:'1.9 s',memory:'本轮无需额外检索'}
+    ];
+    const channelNames = {private:'私聊',group:'群聊',desktop:'桌面'};
+    let channel = 'all';
+    let openReply = null;
+    let activeTask = null;
+    let settingsState = {model:'Gemini / 示例模型',provider:'本地代理 / 示例',endpoint:'',reply:true,tools:true,memory:true,permission:'按风险确认',compact:false,summaries:true};
+
+    function replyDetail(r) {
+      return `<div class="reply-detail"><div><div class="detail-message"><div class="detail-label">输入 / ${r.source}</div><p>${escapeHtml(r.input)}</p></div><div class="detail-message"><div class="detail-label">真红的回复</div><p>${escapeHtml(r.reply)}</p></div></div><div><div class="detail-label">处理过程</div><div class="trace"><div class="trace-step"><span class="step-index mono">01</span>接收消息<small>完成</small><p>${r.source}</p></div><div class="trace-step"><span class="step-index mono">02</span>上下文与记忆<small>完成</small><p>${r.memory}</p></div><div class="trace-step"><span class="step-index mono">03</span>生成回复<small>${r.duration}</small><p>Gemini / 示例模型</p></div><div class="trace-step"><span class="step-index mono">04</span>实际送达<small>完成</small><p>已收到示例通道的成功回执</p></div></div></div></div>`;
+    }
+    function renderReplies() {
+      const q = document.getElementById('reply-search').value.trim().toLowerCase();
+      const rows = replies.filter(r => (channel === 'all' || channel === r.channel) && `${r.input} ${r.reply} ${r.source}`.toLowerCase().includes(q));
+      document.getElementById('reply-rows').innerHTML = rows.length ? rows.map(r => {
+        const expanded = openReply === r.id;
+        return `<tr class="record${expanded?' is-open':''}" data-searchable><td class="time-cell nowrap mono">${r.time}</td><td class="channel-cell">${channelNames[r.channel]}<span class="record-caption" style="display:block">${r.source}</span></td><td><span class="record-title">${escapeHtml(r.input)}</span><span class="record-summary">${escapeHtml(r.reply)}</span></td><td class="nowrap mono muted" style="font-size:11px">${r.duration}</td><td><span class="tag">已送达</span></td><td><button class="link-button" data-reply="${r.id}" aria-expanded="${expanded}" aria-controls="reply-detail-${r.id}" aria-label="${expanded?'收起':'展开'}回复：${escapeHtml(r.input)}">${expanded?'收起 −':'展开 ↗'}</button></td></tr><tr class="detail-row" id="reply-detail-${r.id}" ${expanded?'':'hidden'}><td colspan="6">${expanded?replyDetail(r):''}</td></tr>`;
+      }).join('') : '<tr><td colspan="6" class="empty-row">没有匹配的回复记录。</td></tr>';
+      document.getElementById('reply-count').textContent = `显示 ${rows.length} 条 / 共 ${replies.length} 条示例`;
+    }
+    function showTask(id) {
+      activeTask = activeTask === id ? null : id;
+      const target = document.getElementById('task-detail');
+      document.querySelectorAll('[data-task]').forEach(button => {
+        const expanded = button.dataset.task === activeTask;
+        button.setAttribute('aria-expanded', String(expanded));
+        button.textContent = expanded ? '收起 −' : '展开 ↗';
+        button.closest('tr').classList.toggle('is-open', expanded);
+      });
+      target.hidden = activeTask === null;
+      if (!activeTask) return;
+      const running = activeTask === 'reading';
+      const stages = running ? [
+        ['01 / 完成','收集与核对资料','检查 6 份示例材料，来源齐全。'],
+        ['02 / 完成','按主题归纳要点','归纳 3 个主题，合并重复观点。'],
+        ['03 / 执行中','生成笔记并检查完整性','生成结果，随后核验资料来源。']
+      ] : [
+        ['01 / 完成','收集待办','读取本任务中的演示事项。'],
+        ['02 / 完成','归纳与核对','合并为导航、回复追踪、界面检查三个主题。'],
+        ['03 / 完成','核验与送达','结果已通过检查，原会话已收到回复。']
+      ];
+      target.innerHTML = `<div class="task-detail-head"><h3>${running?'整理本周的阅读笔记':'汇总项目待办'}</h3><span class="mono subtle" style="font-size:10px">${running?'TASK-001':'TASK-002'}</span></div><div class="task-stages">${stages.map(([state,name,detail],i)=>`<div class="task-stage"><small class="mono ${running&&i===2?'yellow':''}">${state}</small><b>${name}</b><p>${detail}</p></div>`).join('')}</div><p class="task-detail-note">${running?'尚未完成核验与送达。完成后，结果将回到原桌面会话。':'结果已送达：完善控制中枢导航、串联回复处理过程、检查不同屏幕下的阅读体验。'}</p>`;
+    }
+
+    // 所有普通信息始终位于文档中。侧栏只跳转锚点，并随当前滚动位置更新高亮。
+    const sections = [...document.querySelectorAll('main > .section')];
+    const navLinks = [...document.querySelectorAll('.section-nav a')];
+    let scrollFrame = 0;
+    function updateScrollPosition() {
+      scrollFrame = 0;
+      const offset = window.innerWidth <= 700 ? 200 : 120;
+      let index = 0;
+      sections.forEach((section,i) => { if (section.getBoundingClientRect().top <= offset) index = i; });
+      const scrollRange = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      if (window.scrollY >= scrollRange - 3) index = sections.length - 1;
+      navLinks.forEach((link,i) => {
+        link.classList.toggle('active', i === index);
+        if (i === index) link.setAttribute('aria-current','location');
+        else link.removeAttribute('aria-current');
+      });
+      document.getElementById('position-label').textContent = `${String(index+1).padStart(2,'0')} / 06`;
+      document.getElementById('read-progress').style.width = `${Math.min(100,window.scrollY/scrollRange*100)}%`;
+    }
+    function queueScrollPosition() { if (!scrollFrame) scrollFrame = requestAnimationFrame(updateScrollPosition); }
+    window.addEventListener('scroll', queueScrollPosition, {passive:true});
+    window.addEventListener('resize', queueScrollPosition);
+    window.addEventListener('hashchange', queueScrollPosition);
+
+    const settingsDialog = document.getElementById('settings-dialog');
+    const settingsForm = document.getElementById('settings-form');
+    let settingsTrigger = null;
+    function selectSettingsTab(name) {
+      document.querySelectorAll('[data-setting-tab]').forEach(button => button.setAttribute('aria-pressed',String(button.dataset.settingTab === name)));
+      document.querySelectorAll('[data-setting-panel]').forEach(panel => panel.hidden = panel.dataset.settingPanel !== name);
+    }
+    function openSettings(name) {
+      settingsTrigger = document.activeElement;
+      for (const [key,value] of Object.entries(settingsState)) {
+        const field = settingsForm.elements.namedItem(key);
+        if (typeof value === 'boolean') field.checked = value;
+        else field.value = value;
+      }
+      selectSettingsTab(name);
+      settingsDialog.showModal();
+    }
+    settingsForm.addEventListener('submit',event => {
+      event.preventDefault();
+      // 先切回无效字段所属面板，避免浏览器试图聚焦隐藏的必填输入框。
+      const modelField = settingsForm.elements.namedItem('model');
+      if (!modelField.value.trim()) {
+        selectSettingsTab('model');
+        modelField.value = '';
+        modelField.reportValidity();
+        return;
+      }
+      for (const key of Object.keys(settingsState)) {
+        const field = settingsForm.elements.namedItem(key);
+        settingsState[key] = field.type === 'checkbox' ? field.checked : field.value.trim();
+      }
+      document.body.classList.toggle('compact',settingsState.compact);
+      document.body.classList.toggle('hide-summaries',!settingsState.summaries);
+      document.getElementById('summary-model').textContent = settingsState.model;
+      document.getElementById('summary-reply').textContent = settingsState.reply?'已开启':'已关闭';
+      document.getElementById('summary-memory').textContent = settingsState.memory?'可用':'已关闭';
+      document.getElementById('memory-state').textContent = settingsState.memory?'可用':'已关闭';
+      settingsDialog.close();
+      notify('已应用到当前原型。实际服务配置未改变。');
+      queueScrollPosition();
+    });
+    document.getElementById('settings-close').addEventListener('click',()=>settingsDialog.close());
+    settingsDialog.addEventListener('close',()=>settingsTrigger?.focus());
+    settingsDialog.addEventListener('click',event => {
+      if (event.target !== settingsDialog) return;
+      const rect = settingsDialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) settingsDialog.close();
+    });
+
+    document.addEventListener('click',event => {
+      const filter = event.target.closest('[data-channel]');
+      if (filter) {
+        channel = filter.dataset.channel;
+        document.querySelectorAll('[data-channel]').forEach(button=>button.setAttribute('aria-pressed',String(button === filter)));
+        renderReplies();
+      }
+      const reply = event.target.closest('[data-reply]');
+      if (reply) {
+        const id = reply.dataset.reply;
+        openReply = openReply === id ? null : id;
+        renderReplies();
+        document.querySelector(`[data-reply="${id}"]`)?.focus({preventScroll:true});
+      }
+      const task = event.target.closest('[data-task]');
+      if (task) showTask(task.dataset.task);
+      const settings = event.target.closest('[data-settings]');
+      if (settings) openSettings(settings.dataset.settings);
+      const settingTab = event.target.closest('[data-setting-tab]');
+      if (settingTab) selectSettingsTab(settingTab.dataset.settingTab);
+    });
+    document.getElementById('reply-search').addEventListener('input',renderReplies);
+
+    // 页面搜索只标记并滚动到可见记录，不隐藏其他信息或替换当前区块。
+    let previousQuery = '';
+    let matchIndex = -1;
+    document.getElementById('page-search').addEventListener('submit',event => {
+      event.preventDefault();
+      const query = document.getElementById('global-search').value.trim().toLowerCase();
+      document.querySelectorAll('.search-match').forEach(el=>el.classList.remove('search-match'));
+      if (!query) { previousQuery=''; matchIndex=-1; return; }
+      const matches = [...document.querySelectorAll('[data-searchable]')].filter(el=>el.getClientRects().length && el.textContent.toLowerCase().includes(query));
+      if (!matches.length) { notify('没有匹配的记录。'); return; }
+      matchIndex = previousQuery === query ? (matchIndex+1)%matches.length : 0;
+      previousQuery = query;
+      matches[matchIndex].classList.add('search-match');
+      const offset = window.innerWidth <= 700 ? 183 : 93;
+      window.scrollTo({top:window.scrollY+matches[matchIndex].getBoundingClientRect().top-offset});
+      notify(`找到 ${matches.length} 条记录，当前 ${matchIndex+1} / ${matches.length}。再次回车查看下一条。`);
+    });
+    document.addEventListener('keydown',event => {
+      if (event.key==='/' && !settingsDialog.open && !event.target.matches('input,textarea,select')) {
+        event.preventDefault();
+        document.getElementById('global-search').focus();
+      }
+    });
+    let toastTimer;
+    function notify(message) {
+      clearTimeout(toastTimer);
+      const toast = document.getElementById('toast');
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = setTimeout(()=>toast.hidden=true,3500);
+    }
+    renderReplies();
+    // 保持旧预览中的会话锚点可用；初次加载由浏览器执行原生定位。
+    requestAnimationFrame(updateScrollPosition);
+  </script>
+</body>
+</html>

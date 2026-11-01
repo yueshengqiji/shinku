@@ -30,9 +30,9 @@ class ReplyRoutingTests(unittest.TestCase):
     def test_real_onebot_self_id_is_used_when_bot_ids_are_not_configured(self) -> None:
         policy = ReplyRoutePolicy()
         decision = policy.decide(_message(
-            {"type": "at", "data": {"qq": "3599477026"}},
+            {"type": "at", "data": {"qq": "100005"}},
             {"type": "text", "data": {"text": "灰度测试"}},
-            self_id=3599477026,
+            self_id=100005,
         ))
         self.assertEqual((decision.should_reply, decision.reason), (True, "mentioned_bot"))
 

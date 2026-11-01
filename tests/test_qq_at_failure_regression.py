@@ -65,7 +65,7 @@ def test_plain_model_reply_is_not_a_synthetic_failure(kind, sender, schema_retry
     # Non-owner has no tools, hence no native-schema retry.
     if schema_retry and sender == "owner":
         scripts.insert(0, ("response", FakeResponse("")))
-    runtime = _make_runtime(scripts=scripts)
+    runtime = _make_runtime(scripts=scripts, dialogue_reviews=True)
     runtime._tool_profile = lambda bundle: ProviderToolProfile(supports_native_tools=True)
     coordinator, sent = AgentTaskCoordinator(), []
     try:
@@ -107,7 +107,7 @@ def test_report_shaping_does_not_split_interactive_controls(status, count):
 
 
 def test_recovered_text_still_cannot_claim_unexecuted_action():
-    runtime = _make_runtime(scripts=[("response", FakeResponse("已删除 C:/fixture/target.zip。"))])
+    runtime = _make_runtime(scripts=[("response", FakeResponse("已删除 C:/fixture/target.zip。"))], dialogue_reviews=True)
     coordinator, sent = AgentTaskCoordinator(), []
     try:
         result = bridge(runtime, coordinator, sent).handle_turn(turn(text="删除 C:/fixture/target.zip"))

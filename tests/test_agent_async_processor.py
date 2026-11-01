@@ -6,7 +6,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Barrier, Event
 import time
 import unittest
 
@@ -101,6 +101,38 @@ class RecordingMutator:
 
 
 class CoordinatorAsyncTests(unittest.TestCase):
+    def test_scoped_agent_target_is_reserved_atomically_at_queue_admission(self):
+        coordinator = AgentTaskCoordinator(max_workers=1)
+        barrier = Barrier(3)
+
+        def admit(work_id):
+            barrier.wait(timeout=2)
+            try:
+                return coordinator.submit(
+                    lambda event: None,
+                    task_id=work_id,
+                    profile_user_id="owner",
+                    session_id="group:42",
+                    defer_start=True,
+                    metadata={"kind": "qq_agent", "agent_task_id": "agent-task:1", "target_claimed": False},
+                )["task_id"]
+            except ValueError as exc:
+                return str(exc)
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(admit, "work:1")
+                second = pool.submit(admit, "work:2")
+                barrier.wait(timeout=2)
+                results = [first.result(timeout=3), second.result(timeout=3)]
+            self.assertEqual(results.count("task_target_already_active"), 1)
+            self.assertEqual(len([item for item in results if item.startswith("work:")]), 1)
+            queued = [row for row in coordinator.list() if row["status"] == "queued"]
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(queued[0]["metadata"]["agent_task_id"], "agent-task:1")
+        finally:
+            coordinator.shutdown(wait=True)
+
     def test_queued_cancel_never_calls_handler_and_processor_can_close(self):
         coordinator = AgentTaskCoordinator(max_workers=1)
         called = []
@@ -328,8 +360,8 @@ class QQAsyncProcessorTests(unittest.TestCase):
             specs = captured[0]["native_tools"]
             self.assertEqual(len(specs), 1)
             parameters = specs[0]["function"]["parameters"]
-            self.assertIn("task_link", parameters["required"])
-            self.assertIn("none", parameters["properties"]["task_link"]["properties"]["mode"]["enum"])
+            self.assertNotIn("task_link", parameters["required"])
+            self.assertIn("query", parameters["properties"]["request_kind"]["enum"])
         finally:
             coordinator.shutdown(wait=True)
 
@@ -380,7 +412,9 @@ class QQAsyncProcessorTests(unittest.TestCase):
                     bridge.runtime = runtime
                     decision = AgentDecision.tool(ToolInvocation(handler.tool_type, {"path": "fixture.txt"}))
                     decision = decision.with_task_metadata({"task_link": {"mode": "none"}, "task_contract": contract})
-                    bridge._run_chat_decision = lambda **kwargs: (decision, {handler.tool_type})
+                    bridge._run_chat_decision = lambda decision=decision, handler=handler, **kwargs: (
+                        decision, {handler.tool_type},
+                    )
 
                     reply = bridge.handle_turn(turn("写入 fixture.txt"))
 
@@ -404,24 +438,102 @@ class QQAsyncProcessorTests(unittest.TestCase):
                 self.calls.append(kwargs)
                 return {"task_link": {"mode": "none"}, "task_contract": {}}
 
+        for async_enabled in (False, True):
+            with self.subTest(async_enabled=async_enabled):
+                coordinator = AgentTaskCoordinator(max_workers=1)
+                handler = RecordingMutator()
+                runtime = MetadataRuntime()
+                try:
+                    bridge = self.make_bridge(coordinator, handler, async_enabled=async_enabled,
+                                              task_contract_enabled=True)
+                    bridge.runtime = runtime
+                    decision = AgentDecision.tool(ToolInvocation(handler.tool_type, {"path": "fixture.txt"}))
+                    bridge._run_chat_decision = lambda decision=decision, handler=handler, **kwargs: (
+                        decision, {handler.tool_type},
+                    )
+
+                    reply = bridge.handle_turn(turn("写入 fixture.txt"))
+
+                    self.assertEqual(reply.agent_status, "blocked")
+                    self.assertEqual(reply.reason, "task_contract_error:task_handoff_requires_new_or_continue")
+                    self.assertEqual(len(runtime.calls), 1)
+                    self.assertEqual(handler.calls, 0)
+                    self.assertEqual(coordinator.list(), [])
+                    requester, session = bridge._task_scope(turn("写入 fixture.txt"))
+                    self.assertEqual(bridge.task_store.candidates(requester=requester, session=session), [])
+                finally:
+                    coordinator.shutdown(wait=True)
+
+    def test_metadata_preparation_cannot_rewrite_the_selected_task_route(self):
+        class RouteChangingRuntime:
+            def __init__(self):
+                self.calls = []
+
+            def call_chat_json(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "task_link": {"mode": "continue", "task_id": "task:other"},
+                    "task_contract": {"requirements": []},
+                }
+
         coordinator = AgentTaskCoordinator(max_workers=1)
         handler = RecordingMutator()
-        runtime = MetadataRuntime()
+        runtime = RouteChangingRuntime()
         try:
-            bridge = self.make_bridge(coordinator, handler, async_enabled=False, task_contract_enabled=True)
+            bridge = self.make_bridge(coordinator, handler, async_enabled=True, task_contract_enabled=True)
             bridge.runtime = runtime
-            decision = AgentDecision.tool(ToolInvocation(handler.tool_type, {"path": "fixture.txt"}))
-            bridge._run_chat_decision = lambda **kwargs: (decision, {handler.tool_type})
+            decision = AgentDecision.tool(ToolInvocation(handler.tool_type, {"path": "fixture.txt"})).with_task_metadata({
+                "task_link": {"mode": "new"},
+            })
+            bridge._run_chat_decision = lambda decision=decision, handler=handler, **kwargs: (
+                decision, {handler.tool_type},
+            )
 
             reply = bridge.handle_turn(turn("写入 fixture.txt"))
 
             self.assertEqual(reply.agent_status, "blocked")
-            self.assertEqual(reply.reason, "task_contract_error:task_handoff_requires_new_or_continue")
+            self.assertEqual(reply.reason, "task_contract_error:task_handoff_changed_after_selection")
             self.assertEqual(len(runtime.calls), 1)
             self.assertEqual(handler.calls, 0)
             self.assertEqual(coordinator.list(), [])
             requester, session = bridge._task_scope(turn("写入 fixture.txt"))
             self.assertEqual(bridge.task_store.candidates(requester=requester, session=session), [])
+        finally:
+            coordinator.shutdown(wait=True)
+
+    def test_valid_async_handoff_is_prepared_then_claimed_before_tool_execution(self):
+        coordinator = AgentTaskCoordinator(max_workers=1)
+        handler = RecordingMutator()
+        try:
+            bridge = self.make_bridge(coordinator, handler, async_enabled=True, task_contract_enabled=True)
+            contract = {
+                "goal": "写入 fixture",
+                "deliverables": ["fixture 写入回执"],
+                "scope": ["仅 fixture"],
+                "requirements": [{
+                    "id": "r1", "description": "fixture 必须写入", "effect": "write",
+                    "targets": ["fixture.txt"], "checks": {},
+                }],
+            }
+            decision = AgentDecision.tool(ToolInvocation(handler.tool_type, {"path": "fixture.txt"})).with_task_metadata({
+                "task_link": {"mode": "new"}, "task_contract": contract,
+            })
+            bridge._run_chat_decision = lambda **kwargs: (decision, {handler.tool_type})
+            source_turn = turn("写入 fixture.txt")
+
+            reply = bridge.handle_turn(source_turn)
+
+            self.assertEqual(reply.agent_status, "waiting_background")
+            record = wait_for(coordinator, reply.background_task_id, "completed")
+            target_id = record["metadata"]["agent_task_id"]
+            self.assertTrue(record["metadata"]["target_claimed"])
+            self.assertEqual(handler.calls, 1)
+            requester, session = bridge._task_scope(source_turn)
+            task = bridge.task_store.get(target_id, requester=requester, session=session)
+            self.assertIsNotNone(task)
+            phases = [stage.get("phase") for stage in bridge.trace_store.snapshot()[-1]["stages"]
+                      if stage.get("name") == "task_handoff"]
+            self.assertEqual(phases, ["routed", "prepared", "queued", "committed", "running", "finished"])
         finally:
             coordinator.shutdown(wait=True)
 

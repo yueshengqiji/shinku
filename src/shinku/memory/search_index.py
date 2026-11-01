@@ -5,11 +5,10 @@ lock; commit and delivery recheck the source. No remote model or raw-turn fallba
 """
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from typing import Any
 
-from .source_reader import MemorySourceReader, fingerprint
+from .source_reader import MemorySourceReader
 
 VERSION = "local-topic-hints-v1"
 SCHEMA = """

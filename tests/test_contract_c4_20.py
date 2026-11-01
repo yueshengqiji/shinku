@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import tempfile
 import unittest
@@ -118,6 +119,9 @@ class QQAgentAssemblyTests(unittest.TestCase):
 
             def call_chat_json(self, **kwargs):
                 self.calls.append(kwargs)
+                review = dialogue_review_result(kwargs)
+                if review is not None:
+                    return review
                 return {"speech": "看到了，先把这两句合在一起处理。"}
 
         runtime = Runtime()

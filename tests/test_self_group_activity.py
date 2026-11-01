@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ from shinku.qq.turns import QQTurn
 
 NOW = 1791016033
 QUESTION = "老婆刚才你在群里和谁说话"
-TEXT = "……那就继续当观众吧。看他什么时候能弄完。"
+TEXT = "已回复活动安排，稍后再确认。"
 
 
 @pytest.fixture
@@ -25,7 +26,7 @@ def service(tmp_path):
                          policy=MemoryPolicy(master_user_ids=("owner",)), clock=lambda: NOW)
 
 
-def source(service, *, group="872732158", message="m1", text=TEXT, sender="bot", self_id="bot", sent=True, at=NOW-41, status="sent"):
+def source(service, *, group="100002", message="m1", text=TEXT, sender="bot", self_id="bot", sent=True, at=NOW-41, status="sent"):
     service.record_turn(conversation_id=group, conversation_type="group", message_id=message+":assistant",
         role="assistant", text=text, source_id=f"turn:{group}:{message}:assistant",
         metadata={"sender_id": sender, "self_id": self_id, "requester_id": "member", "shinku_involved": True,
@@ -72,7 +73,7 @@ def test_original_incident_routes_before_local_private_continuity(service):
     assert result.decision.reason == "self_group_activity"
     assert result.retrieved_count == 1
     assert "小明" in result.rendered
-    assert result.records[0].scope == "group:872732158"
+    assert result.records[0].scope == "group:100002"
     assert "DO_NOT_LEAK" not in json.dumps(result.as_dict())
     with service.store._connect() as con:
         assert con.execute("SELECT COUNT(*) FROM memory_events WHERE scope='private:master'").fetchone()[0] == 0
@@ -124,7 +125,7 @@ def test_unconfirmed_wrong_actor_out_of_window_and_other_bot_do_not_count(servic
 
 
 def test_third_party_and_private_speech_are_not_read(service):
-    service.record_turn(conversation_id="872732158", conversation_type="group", message_id="human",
+    service.record_turn(conversation_id="100002", conversation_type="group", message_id="human",
         text="他人的原话绝不外泄", metadata={"sender_id": "member"})
     service.record_turn(conversation_id="member", conversation_type="private", message_id="private",
         text="另一个人的私聊绝不外泄", metadata={"sender_id": "member"})
@@ -142,7 +143,7 @@ def test_partial_delivery_proves_only_occurrence_not_full_body(service):
 
 def test_revoked_source_cannot_be_revived_by_receipt(service):
     source(service)
-    service.store.forget(scope="group:872732158", query="当观众", now=NOW)
+    service.store.forget(scope="group:100002", query="活动安排", now=NOW)
     assert inspect(service)["count"] == 0
 
 
@@ -155,7 +156,7 @@ def test_expired_source_is_not_activity_evidence(service):
 
 def test_receipt_cannot_confirm_a_different_body(service):
     source(service, sent=False)
-    assert not service.store.confirm_assistant_delivery(scope="group:872732158", source_id="turn:872732158:m1:assistant",
+    assert not service.store.confirm_assistant_delivery(scope="group:100002", source_id="turn:100002:m1:assistant",
         expected_text="另一个回答", delivered_at=NOW)
     assert inspect(service)["count"] == 0
 
@@ -166,6 +167,9 @@ class Runtime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return self.response
 
 
@@ -189,7 +193,7 @@ def test_no_source_replaces_model_fabricated_positive(service):
 def test_only_successful_transport_marks_canonical_source(service, delivery):
     bridge = QQAgentBridge(runtime=Runtime({"speech": TEXT}), system_prompt="persona", memory_service=service,
         sender=(lambda _: delivery) if delivery is not None else None, reply_segment_delay_seconds=0)
-    result = bridge.handle_turn(turn("群里普通问题", sender="member", group="872732158", message_id="receipt"))
+    result = bridge.handle_turn(turn("群里普通问题", sender="member", group="100002", message_id="receipt"))
     assert inspect(service)["count"] == int(delivery is not None and delivery.sent)
     assert result.sent == bool(delivery and delivery.sent)
 
@@ -198,7 +202,11 @@ def test_final_boundary_rechecks_revocation_after_prompt(service):
     source(service)
     class RevokingRuntime(Runtime):
         def call_chat_json(self, **kwargs):
-            service.store.forget(scope="group:872732158", query="当观众", now=NOW)
+            self.calls.append(kwargs)
+            review = dialogue_review_result(kwargs)
+            if review is not None:
+                return review
+            service.store.forget(scope="group:100002", query="活动安排", now=NOW)
             return {"speech": "我刚才回复了小明。"}
     bridge = QQAgentBridge(runtime=RevokingRuntime({}), system_prompt="persona", memory_service=service)
     assert "没法确认" in bridge.handle_turn(turn()).final_text
@@ -221,7 +229,7 @@ def test_configured_bot_identity_fallback_is_safe_for_frozenset(service):
 
 def test_complete_body_requires_separate_receipt_confirmation(service):
     source(service, sent=False)
-    assert service.store.confirm_assistant_delivery(scope="group:872732158", source_id="turn:872732158:m1:assistant",
+    assert service.store.confirm_assistant_delivery(scope="group:100002", source_id="turn:100002:m1:assistant",
         expected_text=TEXT, delivered_at=NOW)
     result = service.inspect_self_group_activity(conversation_id="owner", conversation_type="private",
         requester_id="owner", query="你刚才在群里说了什么", self_id="bot")

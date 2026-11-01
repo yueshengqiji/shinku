@@ -32,6 +32,7 @@ class GroupContextItem:
     at_target_labels: tuple[str, ...] = ()
     at_target_ids: tuple[str, ...] = ()
     reply_message_ids: tuple[str, ...] = ()
+    has_image: bool = False
 
     def render(self) -> str:
         label = self.sender_label or self.sender_id or "群成员"
@@ -92,6 +93,7 @@ class GroupContextTracker:
                             "at_target_labels": list(item.at_target_labels),
                             "at_target_ids": list(item.at_target_ids),
                             "reply_message_ids": list(item.reply_message_ids),
+                            "has_image": item.has_image,
                         }
                         for item in context
                     ],
@@ -104,6 +106,7 @@ class GroupContextTracker:
                         "at_target_ids": list(message.at_target_ids),
                         "at_target_labels": list(message.at_target_labels),
                         "reply_message_ids": list(message.reply_message_ids),
+                        "has_image": any(segment.kind == "image" for segment in message.segments),
                         "reply_parents": [self._as_dict(item) for item in reply_parents],
                         "route_addressed": bool(route.addressed),
                         "route_reason": str(route.reason or ""),
@@ -123,6 +126,7 @@ class GroupContextTracker:
                         at_target_labels=tuple(message.at_target_labels),
                         at_target_ids=tuple(message.at_target_ids),
                         reply_message_ids=tuple(message.reply_message_ids),
+                        has_image=any(segment.kind == "image" for segment in message.segments),
                     )
                 )
                 self._trim(bucket)
@@ -141,7 +145,7 @@ class GroupContextTracker:
         key = str(conversation_id or "").strip()
         with self._lock:
             focus = self._focuses.get(key)
-            if not focus or float(now) - float(focus.get("last_at") or 0.0) > self.ttl_seconds:
+            if not focus or float(now) - float(focus.get("addressed_at", focus.get("started_at", 0.0))) > self.ttl_seconds:
                 return {}
             return self._public_focus(focus)
 
@@ -221,7 +225,9 @@ class GroupContextTracker:
 
         key = str(message.conversation_id or "").strip()
         focus = self._focuses.get(key)
-        if focus and now - float(focus.get("last_at") or 0.0) > self.ttl_seconds:
+        # 普通同一成员发言只能补上下文，不能无限延长“正在对别人说话”的硬拦截。
+        # 明确 @ 或引用该对话中的消息才刷新定向证据的寿命。
+        if focus and now - float(focus.get("addressed_at", focus.get("started_at", 0.0))) > self.ttl_seconds:
             self._focuses.pop(key, None)
             focus = None
 
@@ -249,11 +255,13 @@ class GroupContextTracker:
                     "participant_labels": list(dict.fromkeys(([sender_label] if sender_label else []) + [label for _, label in targets])),
                     "message_ids": [],
                     "started_at": now,
+                    "addressed_at": now,
                     "last_at": now,
                 }
                 self._focuses[key] = focus
             else:
                 focus["last_at"] = now
+                focus["addressed_at"] = now
                 for target_key, (_, label) in zip(target_keys, targets):
                     if target_key not in focus["participant_ids"]:
                         focus["participant_ids"].append(target_key)
@@ -265,6 +273,8 @@ class GroupContextTracker:
             reply_matches = bool(focus_ids.intersection(message.reply_message_ids))
             participant_matches = bool(sender_id and sender_id in set(focus.get("participant_ids", ())))
             if reply_matches or participant_matches:
+                if reply_matches:
+                    focus["addressed_at"] = now
                 message_id = str(message.message_id or "").strip()
                 if message_id and message_id not in focus["message_ids"]:
                     focus["message_ids"].append(message_id)
@@ -315,6 +325,8 @@ class GroupContextTracker:
     @staticmethod
     def _message_text(message: IncomingMessage) -> str:
         text = str(message.text_without_at_mentions or "").strip()
+        if message.card_context:
+            text = f"{text}\n{message.card_context}".strip()
         if message.has_media:
             text = f"{text}\n[附件]".strip()
         return text[:600]
@@ -330,5 +342,6 @@ class GroupContextTracker:
             "at_target_labels": list(item.at_target_labels),
             "at_target_ids": list(item.at_target_ids),
             "reply_message_ids": list(item.reply_message_ids),
+            "has_image": item.has_image,
             "rendered": item.render(),
         }

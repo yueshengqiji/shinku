@@ -3,53 +3,98 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Shinku 控制中枢</title>
+  <meta name="color-scheme" content="dark">
+  <title>角色 / 控制中枢</title>
   <link rel="stylesheet" href="/debug/hub/assets/app.css">
 </head>
 <body>
-<main>
-  <header>
-    <div><h1>Shinku 控制中枢</h1><div class="subtitle">独立版 · 本机控制与运行监控</div></div>
-    <div class="header-actions"><div id="mode" class="badge">仅限本机操作</div><button id="refresh-now" type="button">立即刷新</button><button id="auto-refresh" type="button" aria-pressed="true">自动刷新：开</button></div>
-  </header>
-  <section class="grid">
-    <article class="card"><h2>服务</h2><div id="service" class="kv"><div>加载中</div><div>—</div></div></article>
-    <article class="card"><h2>Agent</h2><div id="agent" class="kv"><div>加载中</div><div>—</div></div><div id="agent-actions" class="actions"></div></article>
-    <article class="card"><h2>记忆</h2><div id="memory" class="kv"><div>加载中</div><div>—</div></div></article>
-    <article class="card"><h2>NapCat</h2><div id="napcat" class="kv"><div>加载中</div><div>—</div></div></article>
-    <article class="card"><h2>运行配置</h2><div id="runtime-config" class="kv"><div>加载中</div><div>—</div></div></article>
-    <article class="card wide"><h2>运行指标</h2><div id="metrics" class="metric-grid"><div class="empty">加载中</div></div></article>
-    <article class="card wide"><h2>模型服务</h2><div id="model-services"><div class="empty">加载中</div></div></article>
-  </section>
-  <section class="card metrics-history"><h2>近七日指标</h2><div id="metrics-recent"><div class="empty">加载中</div></div></section>
-  <section class="card traces"><h2>最近处理链</h2><div id="traces"><div class="empty">加载中</div></div></section>
-  <section class="grid diagnostics-grid">
-    <article class="card"><h2>QQ 自检</h2><div id="qq-diagnostics"><div class="empty">加载中</div></div></article>
-    <article class="card"><h2>后台任务</h2><div id="agent-tasks"><div class="empty">加载中</div></div></article>
-  </section>
-  <section class="card wide approval-inspector">
-    <h2>待授权工具</h2>
-    <div class="approval-form">
-      <input id="approval-conversation" placeholder="会话 ID（用于查看当前待授权请求）">
-      <button id="approval-inspect" type="button">查看授权状态</button>
+<a class="skip-link" href="#overview">跳至运行总览</a>
+<!-- 所有业务状态仍归后端持有；顶部只收纳原有控制入口，侧栏仅滚动定位。 -->
+<header class="topbar">
+  <a class="brand" href="#overview" aria-label="角色控制中枢首页"><span class="brand-name">角色</span><span class="brand-meta"><span id="character-code">INSTANCE</span><br>CONTROL</span></a>
+  <div class="topbar-inner"><span class="product-title">控制中枢 <span id="mode" class="badge">本机控制</span></span>
+    <div class="top-tools">
+      <button type="button" data-dialog="model-settings">模型服务</button>
+      <button type="button" data-dialog="agent-settings">Agent 控制</button>
+      <button type="button" data-dialog="pet-settings">桌宠</button>
+      <button type="button" data-dialog="display-settings">显示设置</button>
     </div>
-    <div id="approval-result"><div class="empty">只查看，不在这里批准或执行工具。</div></div>
-  </section>
-  <section class="card wide"><h2>工具目录</h2><div id="capabilities"><div class="empty">加载中</div></div></section>
-  <section class="card wide memory-inspector">
-    <h2>记忆检视</h2>
-    <div class="memory-form">
-      <input id="memory-conversation" placeholder="会话 ID（例如群号或 QQ 号）">
-      <select id="memory-type"><option value="private">私聊</option><option value="group">群聊</option></select>
-      <select id="memory-mode"><option value="recent">最近记录</option><option value="retrieve">相关检索</option><option value="summary">摘要</option><option value="facts">长期事实</option></select>
-      <input id="memory-query" placeholder="可选：检索问题或关键词">
-      <button id="memory-inspect" type="button">读取记忆</button>
+  </div>
+</header>
+<aside class="sidebar" aria-label="页面定位">
+  <div class="sidebar-title">快速定位</div>
+  <nav class="section-nav" aria-label="信息分区">
+    <a href="#overview" class="active" aria-current="location"><span class="num">01</span>运行总览</a>
+    <a href="#conversations"><span class="num">02</span>回合与注意力</a>
+    <a href="#tasks"><span class="num">03</span>后台任务</a>
+    <a href="#memory-section"><span class="num">04</span>记忆与路由</a>
+    <a href="#calls"><span class="num">05</span>指标与工具</a>
+    <a href="#system"><span class="num">06</span>系统与日志</a>
+  </nav>
+  <div class="sidebar-bottom"><div class="read-position"><span>浏览位置</span><span id="read-percent">0%</span></div><div class="read-track"><span id="read-progress"></span></div><span id="connection-state" role="status">连接中</span><p>LOCAL CONTROL CENTER</p></div>
+</aside>
+<main class="main" id="main-content">
+  <div id="connection-warning" class="notice" role="status" hidden></div>
+  <div id="operation-result" class="notice" role="status" hidden></div>
+  <section id="overview" class="section" aria-labelledby="overview-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">01</span><h1 id="overview-title">运行总览</h1></div><p class="section-caption">服务状态、当前模型与运行用量</p></div><div class="header-actions"><button id="refresh-now" type="button">立即刷新</button><button id="auto-refresh" type="button" aria-pressed="true">自动刷新：开</button></div></div>
+    <div id="instance-connection" class="notice" role="status">正在核对 QQ 连接…</div>
+    <div id="runtime-summary" class="overview-top">正在读取本机服务…</div>
+    <div id="overview-metrics" class="metric-grid overview-metrics"><div class="empty">加载中</div></div>
+    <div class="grid overview-grid">
+      <article class="card"><h3>主服务</h3><div id="service" class="kv"><div>加载中</div><div>—</div></div></article>
+      <article class="card"><h3>Agent 运行状态</h3><div id="agent" class="kv"><div>加载中</div><div>—</div></div></article>
     </div>
-    <div id="memory-result"><div class="empty">输入会话 ID 后读取；不会自动把记忆内容注入对话。</div></div>
+    <div id="updated" class="footer">尚未读取状态</div>
   </section>
-  <section class="card logs"><h2>运行日志</h2><div id="logs"><div class="empty">加载中</div></div></section>
-  <div id="updated" class="footer">尚未读取状态</div>
+  <section id="conversations" class="section" aria-labelledby="conversations-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">02</span><h2 id="conversations-title">回合与注意力</h2></div><p class="section-caption">处理阶段、模型用量与实际投递状态 · 接口仅提供元数据</p></div></div>
+    <article class="card console-chat" aria-labelledby="console-chat-title">
+      <div class="toolbar"><h3 id="console-chat-title">和角色对话</h3><button id="console-chat-new" type="button">新对话</button></div>
+      <p class="muted" id="console-chat-model">正在读取角色的运行模型…</p>
+      <div id="console-chat-messages" class="console-chat-messages" role="log" aria-live="polite" aria-relevant="additions"><p class="muted">从这里与角色进行本机对话。当前页面保留正文，刷新后清空显示。</p></div>
+      <form id="console-chat-form">
+        <label for="console-chat-input">发给角色</label>
+        <textarea id="console-chat-input" rows="2" maxlength="12000" placeholder="和角色说点什么……" required></textarea>
+        <div class="toolbar"><span id="console-chat-status" role="status">本机对话，不向 QQ 发送消息。Ctrl / ⌘ + Enter 发送。</span><button id="console-chat-send" type="submit">发送</button></div>
+      </form>
+    </article>
+    <div class="toolbar"><div class="filter-group" role="group" aria-label="处理链渠道"><button type="button" data-channel="all" aria-pressed="true">全部</button><button type="button" data-channel="private" aria-pressed="false">QQ 私聊</button><button type="button" data-channel="group" aria-pressed="false">QQ 群聊</button><button type="button" data-channel="desktop" aria-pressed="false">桌面</button></div><input id="trace-search" type="search" aria-label="搜索处理链" placeholder="会话 ID / 追踪号 / 状态"></div>
+    <article class="card"><h3>最近处理链</h3><div id="traces"><div class="empty">加载中</div></div></article>
+    <article class="card"><h3>最近注意力决策</h3><div id="attention-traces"><div class="empty">加载中</div></div></article>
+  </section>
+  <section id="tasks" class="section" aria-labelledby="tasks-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">03</span><h2 id="tasks-title">后台任务</h2></div><p class="section-caption">任务状态、执行结果与预算明细 · 最近 20 项</p></div><select id="task-filter" aria-label="筛选任务状态"><option value="all">全部状态</option><option value="active">进行中</option><option value="completed">已完成</option><option value="failed">失败 / 取消</option></select></div>
+    <div id="agent-tasks"><div class="empty">加载中</div></div>
+    <!-- 详情独立于轮询列表，避免自动刷新清空用户正在阅读的结果。 -->
+    <div id="task-detail" aria-live="polite"></div>
+    <article class="card approval-inspector"><h3>待授权工具</h3><div class="approval-form"><input id="approval-conversation" aria-label="授权查询会话 ID" placeholder="会话 ID"><button id="approval-inspect" type="button">查看授权状态</button></div><div id="approval-result"><div class="empty">只查看，不在这里批准或执行工具。</div></div></article>
+  </section>
+  <section id="memory-section" class="section" aria-labelledby="memory-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">04</span><h2 id="memory-title">记忆与路由</h2></div><p class="section-caption">存储统计、上下文投影与按会话检视</p></div></div>
+    <article class="card"><h3>记忆状态</h3><div id="memory" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card memory-inspector"><h3>记忆检视</h3><div class="memory-form"><input id="memory-conversation" aria-label="记忆查询会话 ID" placeholder="会话 ID（群号或 QQ 号）"><select id="memory-type" aria-label="会话类型"><option value="private">私聊</option><option value="group">群聊</option></select><select id="memory-mode" aria-label="记忆模式"><option value="recent">最近记录</option><option value="retrieve">相关检索</option><option value="summary">摘要</option><option value="facts">长期事实</option></select><input id="memory-query" aria-label="记忆检索问题" placeholder="可选：问题或关键词"><button id="memory-inspect" type="button">读取记忆</button></div><div id="memory-result"><div class="empty">输入会话 ID 后读取；不会自动把记忆内容注入对话。</div></div></article>
+    <article class="card"><h3>最近记忆路由</h3><div id="memory-routing"><div class="empty">加载中</div></div></article>
+  </section>
+  <section id="calls" class="section" aria-labelledby="calls-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">05</span><h2 id="calls-title">指标与工具</h2></div><p class="section-caption">运行时计数、历史指标与当前能力目录</p></div></div>
+    <article class="card"><h3>运行指标</h3><div id="metrics" class="metric-grid"><div class="empty">加载中</div></div></article>
+    <article class="card"><h3>近七日指标</h3><div id="metrics-recent"><div class="empty">加载中</div></div></article>
+    <article class="card"><h3>工具目录</h3><div id="capabilities"><div class="empty">加载中</div></div></article>
+  </section>
+  <section id="system" class="section" aria-labelledby="system-title">
+    <div class="section-heading"><div><div class="heading-main"><span class="section-number">06</span><h2 id="system-title">系统与日志</h2></div><p class="section-caption">连接诊断、运行配置与本机日志</p></div></div>
+    <div class="grid"><article class="card"><h3>NapCat</h3><div id="napcat" class="kv"><div>加载中</div><div>—</div></div></article><article class="card"><h3>桌宠状态</h3><div id="desktop-pet" class="kv"><div>加载中</div><div>—</div></div></article></div>
+    <article class="card"><h3>QQ 自检</h3><div id="qq-diagnostics"><div class="empty">加载中</div></div></article>
+    <article class="card"><h3>运行配置</h3><div id="runtime-config" class="kv"><div>加载中</div><div>—</div></div></article>
+    <article class="card logs"><h3>运行日志</h3><div id="logs"><div class="empty">加载中</div></div></article>
+  </section>
+  <footer class="page-footer"><span>角色 / CONTROL CENTER</span><a href="#overview">返回顶部 ↑</a></footer>
 </main>
+<dialog id="model-settings" aria-labelledby="model-settings-title"><div class="dialog-head"><div><h2 id="model-settings-title">模型服务</h2><p class="section-caption">配置供应方、刷新模型列表与激活模型</p></div><button type="button" data-close-dialog aria-label="关闭模型服务">关闭 ×</button></div><div class="dialog-body"><div class="dialog-result notice" role="status" hidden></div><div id="model-services"><div class="empty">加载中</div></div></div></dialog>
+<dialog id="agent-settings" aria-labelledby="agent-settings-title"><div class="dialog-head"><h2 id="agent-settings-title">Agent 控制</h2><button type="button" data-close-dialog aria-label="关闭 Agent 控制">关闭 ×</button></div><div class="dialog-body"><p id="agent-control-summary" class="muted">正在读取状态…</p><div class="dialog-result notice" role="status" hidden></div><div id="agent-actions" class="actions"></div></div></dialog>
+<dialog id="pet-settings" aria-labelledby="pet-settings-title"><div class="dialog-head"><h2 id="pet-settings-title">桌宠控制</h2><button type="button" data-close-dialog aria-label="关闭桌宠控制">关闭 ×</button></div><div class="dialog-body"><p id="pet-control-summary" class="muted">正在读取状态…</p><div class="dialog-result notice" role="status" hidden></div><div id="pet-actions" class="actions"></div></div></dialog>
+<dialog id="display-settings" aria-labelledby="display-settings-title"><div class="dialog-head"><h2 id="display-settings-title">显示设置</h2><button type="button" data-close-dialog aria-label="关闭显示设置">关闭 ×</button></div><div class="dialog-body"><label class="display-option"><span>紧凑行距<small>减少记录间距，便于密集查看</small></span><input id="compact-view" type="checkbox"></label><p class="muted">深黑背景 · 直角边界 · 黄色选中</p></div></dialog>
 <script src="/debug/hub/assets/app.js" defer></script>
 </body>
 </html>

@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
-from typing import Callable, Any
+from typing import Callable
 import uuid
 
 

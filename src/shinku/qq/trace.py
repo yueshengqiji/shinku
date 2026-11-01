@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -52,6 +53,72 @@ _METRIC_KEYS = frozenset({"started_at", "finished_at", "elapsed_ms", "input_char
     "segment_count", "message_id_count", "source_count", "read_chunks", "bound_claims"})
 _NESTED_KEYS = frozenset({"budget", "usage", "verification", "completion", "nested", "contract_shape"})
 _CONTROL_VALUE = re.compile(r"[A-Za-z0-9_.:\[\]/\-]{0,160}\Z")
+_CONTROL_KEYS |= {'binding', 'span_id', 'parent_id', 'request_id'}
+_METRIC_KEYS |= {'duration_ms', 'elapsed_seconds', 'cache_hit_tokens', 'cache_miss_tokens',
+                 'cache_creation_tokens', 'reasoning_tokens', 'timing_truncated', 'timing_error'}
+
+
+def _event_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
+    """补充已有事件的安全字段；不把任意嵌套映射或相似键名放入通用白名单。"""
+    clean: dict[str, Any] = {}
+    if value.get("name") == "chat_stream_complete":
+        first = value.get("first_chunk_ms")
+        # None表示未取得观测，不能伪造为0；布尔值不是耗时或片段计数。
+        if "first_chunk_ms" in value and (first is None or
+                type(first) in (int, float) and 0 <= first <= 2**53 - 1 and math.isfinite(first)):
+            clean["first_chunk_ms"] = first
+        for key in ("chunks", "transport_chunks"):
+            if type(value.get(key)) is int and 0 <= value[key] <= 2**31 - 1:
+                clean[key] = value[key]
+        if type(value.get("rescued")) is bool:
+            clean["rescued"] = value["rescued"]
+    elif value.get("name") == "context_sources":
+        from shinku.memory.context_sources import (
+            CONTEXT_SOURCE_READ_PATHS, CONTEXT_SOURCE_REJECTION_REASONS,
+        )
+        if value.get("state") in ("valid", "invalid"):
+            clean["state"] = value["state"]
+        if value.get("absence_means") == "unknown":
+            clean["absence_means"] = "unknown"
+        paths = value.get("read_paths")
+        if isinstance(paths, (list, tuple)):
+            clean["read_paths"] = [p for p in paths[:30]
+                                   if isinstance(p, str) and p and p in CONTEXT_SOURCE_READ_PATHS]
+        if type(value.get("rejected")) is int and 0 <= value["rejected"] <= 2**31 - 1:
+            clean["rejected"] = value["rejected"]
+        counts = value.get("reason_counts")
+        if isinstance(counts, Mapping):
+            clean["reason_counts"] = {k: v for k, v in list(counts.items())[:64]
+                if isinstance(k, str) and k in CONTEXT_SOURCE_REJECTION_REASONS
+                and type(v) is int and 0 <= v <= 2**31 - 1}
+    return clean
+
+
+def _response_protocol_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
+    """只投影聊天响应的固定元数据；独立于其他事件，不扩展通用嵌套字段。"""
+    clean: dict[str, Any] = {}
+    if value.get("name") != "chat_response_protocol":
+        return clean
+    stages = value.get("stages")
+    known = {"native_call", "json_object", "partial_object", "plain_reply_candidate",
+        "parse_invalid", "empty_response", "transport_error", "output_incomplete",
+        "final_text_json_recovered", "wait_text_json_recovered"}
+    if isinstance(stages, (list, tuple)):
+        clean["stages"] = [s for s in stages[:30] if isinstance(s, str) and s in known]
+    if (isinstance(value.get("finish_reason"), str)
+            and value["finish_reason"] in {"stop", "tool_calls", "length", "content_filter", "unknown"}):
+        clean["finish_reason"] = value["finish_reason"]
+    shape = value.get("response_shape")
+    if isinstance(shape, Mapping):
+        fields = {"transport": {"stream", "json"},
+            "body_shape": {"empty", "object", "array", "fenced", "text", "other"},
+            "native_call": {"none", "present", "malformed"}}
+        detail = {k: shape[k] for k, choices in fields.items()
+                  if isinstance(shape.get(k), str) and shape[k] in choices}
+        if type(shape.get("body_chars")) is int and 0 <= shape["body_chars"] <= 2**31 - 1:
+            detail["body_chars"] = shape["body_chars"]
+        clean["response_shape"] = detail
+    return clean
 
 
 def _disk_details(value: Mapping[str, Any], *, depth: int = 0) -> dict[str, Any]:
@@ -68,6 +135,8 @@ def _disk_details(value: Mapping[str, Any], *, depth: int = 0) -> dict[str, Any]
             clean[key] = item
         elif key in _NESTED_KEYS and isinstance(item, Mapping):
             clean[key] = _disk_details(item, depth=depth + 1)
+    clean.update(_event_diagnostics(value))
+    clean.update(_response_protocol_diagnostics(value))
     return clean
 
 
@@ -167,6 +236,42 @@ class TurnTraceStore:
             self._persist()
         return trace_id
 
+    @contextmanager
+    def observe(self, trace_id):
+        """每个同步回合/后台切片显式绑定；复用追踪存储，不创建业务状态。"""
+        from shinku.phase_timing import bind_observer, clean_span, PHASES
+        from shinku.llm.request_ledger import bind_provider_calls, provider_call_context
+        from shinku.agent_runtime.evaluation import provider_usage, summarize_calls
+
+        def emit(event, *, provider=False):
+            try:
+                if event.get('binding') != trace_id:
+                    raise ValueError('trace_timing_binding_mismatch')
+                if provider:
+                    row = {k: event.get(k) for k in ('binding', 'request_id', 'status', 'elapsed_seconds')}
+                    row['phase'] = event.get('phase') if event.get('phase') in PHASES else 'unclassified'
+                    row['usage'] = {k: (event.get('usage') or {}).get(k) for k in provider_usage({})}
+                    summarize_calls([dict(row, status='unknown' if row['status'] == 'started' else row['status'])])
+                else:
+                    row = clean_span(event)
+                self.stage(trace_id, 'provider_request' if provider else 'phase_timing', **row)
+            except Exception:
+                with self._lock:
+                    record = self._find(trace_id)
+                    if record is not None:
+                        record['timing_error'] = True
+        upstream_binding, upstream = provider_call_context()
+        def provider_event(row):
+            emit(row, provider=True)
+            # 保留已有外部验收账本；它继续使用原绑定，不能被新展示采集器吞掉。
+            if callable(upstream):
+                try:
+                    upstream(dict(row, binding=upstream_binding))
+                except Exception:
+                    pass
+        with bind_observer(trace_id, emit), bind_provider_calls(trace_id, provider_event):
+            yield
+
     def stage(self, trace_id: str, name: str, **details: Any) -> None:
         identifier = str(trace_id or "").strip()
         if not identifier:
@@ -182,6 +287,8 @@ class TurnTraceStore:
                 if str(key).strip().lower() not in _SENSITIVE_KEYS
             }
             record["stages"].append({"name": str(name or "stage")[:80], "elapsed_ms": elapsed, **clean})
+            if len(record['stages']) > self.max_stages:
+                record['timing_truncated'] = True
             del record["stages"][:-self.max_stages]
             self._persist()
 
@@ -215,7 +322,16 @@ class TurnTraceStore:
         with self._lock:
             self._expire()
             rows = list(self._items)[-wanted:]
-            return [self._copy(row) for row in reversed(rows)]
+            from shinku.phase_timing import summarize_phases
+            snapshots = [self._copy(row) for row in reversed(rows)]
+            for row in snapshots:
+                row['performance'] = summarize_phases(
+                    [s for s in row['stages'] if s.get('name') == 'phase_timing'],
+                    [s for s in row['stages'] if s.get('name') == 'provider_request'],
+                    truncated=row.get('timing_truncated') or row.get('timing_error') or bool(self.persistence_error))
+                row['performance']['delegatedTaskIds'] = sorted({s['task_id'] for s in row['stages']
+                    if s.get('name') == 'agent_delegation' and s.get('task_id')})
+            return snapshots
 
     def _expire(self) -> None:
         cutoff = float(self.clock()) - self.retention_seconds
@@ -266,6 +382,7 @@ class TurnTraceStore:
                     rows.pop(0)
                 elif rows and rows[0].get("stages"):
                     rows[0]["stages"].pop(0)
+                    rows[0]['timing_truncated'] = True
                 else:
                     rows = []
             self.path.parent.mkdir(parents=True, exist_ok=True)

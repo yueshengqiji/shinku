@@ -162,6 +162,19 @@ class AgentTaskCoordinator:
                     "started_at": previous.started_at, "finished_at": previous.finished_at,
                     "error": previous.error, "result_summary": previous.result_summary,
                 }][-16:]
+            target_id = str((metadata or {}).get("agent_task_id") or "").strip() if isinstance(metadata, Mapping) else ""
+            if target_id and str(profile_user_id or "").strip() and str(session_id or "").strip():
+                # The bridge's earlier list/check is for a useful user-facing
+                # response. This locked check is the actual admission boundary:
+                # two concurrent turns cannot queue separate work records for
+                # the same scoped Agent ledger before either worker claims it.
+                for other in self._records.values():
+                    if (other.task_id != identifier
+                            and other.profile_user_id == str(profile_user_id or "").strip()
+                            and other.session_id == str(session_id or "").strip()
+                            and (other.status == "queued" or self._active(other))
+                            and str(other.metadata.get("agent_task_id") or "").strip() == target_id):
+                        raise ValueError("task_target_already_active")
             record = AgentTaskRecord(
                 task_id=identifier,
                 goal=str(goal or "").strip()[:500],
@@ -305,6 +318,35 @@ class AgentTaskCoordinator:
             self._persist_record(record)
             return True
 
+    def claim_handoff_notice(self, task_id: str, *, attempt: int) -> bool:
+        """Claim the foreground stage send once, before any external attempt."""
+        with self._lock:
+            record = self._records.get(task_id)
+            if (record is None or record.attempt != attempt or record.cancel_requested
+                    or record.status != "queued" or not record.metadata.get("query_operation_id")
+                    or record.metadata.get("foreground_delivery")):
+                return False
+            record.metadata["foreground_delivery"] = {"status": "claimed", "sent": False}
+            self._persist_record(record)
+            return True
+
+    def record_handoff_delivery(self, task_id: str, *, attempt: int, status: str, sent: bool,
+                                receipt: Mapping[str, Any] | None = None) -> bool:
+        with self._lock:
+            record = self._records.get(task_id)
+            if (record is None or record.attempt != attempt
+                    or record.metadata.get("foreground_delivery", {}).get("status") != "claimed"):
+                return False
+            record.metadata["foreground_delivery"] = {"status": str(status or "unknown")[:80], "sent": sent is True}
+            if isinstance(receipt, Mapping):
+                record.metadata["foreground_delivery"]["receipt"] = {
+                    "status": str(receipt.get("status") or "unknown")[:80],
+                    "sent": receipt.get("sent") is True,
+                    "definitive_not_sent": receipt.get("definitive_not_sent") is True,
+                    "message_ids": [str(value)[:160] for value in list(receipt.get("message_ids") or ())[:32]]}
+            self._persist_record(record)
+            return True
+
     def claim_target(self, task_id: str, *, attempt: int, agent_task_id: str) -> bool:
         """One live attempt owns an Agent ledger; queued guesses grant nothing."""
         with self._lock:
@@ -314,7 +356,7 @@ class AgentTaskCoordinator:
             for other in self._records.values():
                 if (other.task_id != task_id and other.profile_user_id == record.profile_user_id
                         and other.session_id == record.session_id and (other.worker_active or other.status == "queued")
-                        and other.metadata.get("target_claimed") and other.metadata.get("agent_task_id") == agent_task_id):
+                        and str(other.metadata.get("agent_task_id") or "").strip() == str(agent_task_id).strip()):
                     return False
             record.metadata.update({"agent_task_id": agent_task_id, "target_claimed": True})
             self._persist_record(record)
@@ -435,7 +477,10 @@ class AgentTaskCoordinator:
                 if not task_id:
                     continue
                 status = str(value.get("status") or "failed")
-                if status not in TERMINAL_WORKFLOW_STATUSES:
+                # 已退出worker的等待是持久挂起，不因重启变失败；在途批准线程
+                # 和运行任务仍按中断处理，禁止把丢失的执行线程伪装成可安全等待。
+                quiescent = status in {"waiting_user", "blocked"} and value.get("worker_active") is False
+                if status not in TERMINAL_WORKFLOW_STATUSES and not quiescent:
                     status = validate_workflow_transition(status, "failed")
                     value["status"] = status
                     value["updated_at"] = now

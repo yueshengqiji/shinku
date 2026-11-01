@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -181,8 +182,11 @@ def build_model_service_settings(
         api_key = str(existing_api_key or "").strip()
     default_model = str((default_models or {}).get(provider_id) or "").strip()
 
+    # 预置目录只补连接参数，不拥有注册表条目的身份。后台宿主可能早于控制中心
+    # 新增供应商启动；若把未列入其目录的 id 改成通用 id，会合并多条配置，并让
+    # activeProviderId 失效而选中另一家。保留显式 id，让所有宿主读取同一选择。
     settings = ModelServiceSettings(
-        provider_id=provider_id if provider_id in by_id else DEFAULT_PROVIDER_ID,
+        provider_id=provider_id or DEFAULT_PROVIDER_ID,
         protocol=protocol,
         base_url=normalize_configured_base_url(declared_url, protocol=protocol),
         api_key=api_key,
@@ -646,10 +650,21 @@ class ModelServiceConfigStore:
             else {},
         }
         temp_path = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
-        temp_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        os.replace(temp_path, self.path)
+        with temp_path.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Retry only the same closed snapshot, never configuration application,
+        # runtime reload or provider probes. A permanent denial leaves the old
+        # registry and the failed temporary snapshot intact.
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, self.path)
+                return
+            except PermissionError as exc:
+                if getattr(exc, "winerror", None) != 5 or attempt == 4:
+                    raise
+                time.sleep(.02 * 2 ** attempt)
 
 
 def load_and_apply_saved_model_service(

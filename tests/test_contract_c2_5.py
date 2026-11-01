@@ -15,6 +15,9 @@ token 用量 / 缓存提示的完整行为属 C2-5b / C2-5c 的测试面。
 
 from __future__ import annotations
 
+import json
+from reply_review_fixture import wire_dialogue_review_result
+
 import os
 import sys
 import tempfile
@@ -87,6 +90,10 @@ class FakeCompletions:
 
     def create(self, **payload: Any):
         self._client.payloads.append(payload)
+        if getattr(self._client, "dialogue_reviews", False):
+            review = wire_dialogue_review_result(payload)
+            if review is not None:
+                return FakeResponse(json.dumps(review, ensure_ascii=False), usage={"total_tokens": 10})
         if not self._client.scripts:
             raise AssertionError("fake transport: no scripted response left")
         kind, value = self._client.scripts.pop(0)
@@ -145,12 +152,15 @@ def _make_runtime(
     base_url: str = "https://api.example.test/v1",
     chat_model: str = "chat-model",
     scripts=None,
+    dialogue_reviews: bool = False,
 ) -> LLMRuntime:
     captured: list[dict[str, Any]] = []
 
     def fake_build(**kwargs: Any) -> FakeClient:
         captured.append(dict(kwargs))
-        return FakeClient(protocol=protocol, base_url=base_url, scripts=scripts)
+        client = FakeClient(protocol=protocol, base_url=base_url, scripts=scripts)
+        client.dialogue_reviews = dialogue_reviews
+        return client
 
     env = {
         "SHINKU_CHAT_MODEL_NAME": chat_model,

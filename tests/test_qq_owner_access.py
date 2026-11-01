@@ -1,6 +1,8 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -34,6 +36,9 @@ class _SpeechRuntime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         return self.response
 
 
@@ -43,6 +48,9 @@ class _ToolThenSpeechRuntime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         if len(self.calls) == 1:
             return {
                 "tool_calls": [
@@ -58,6 +66,9 @@ class _ApprovalRuntime:
 
     def call_chat_json(self, **kwargs):
         self.calls.append(kwargs)
+        review = dialogue_review_result(kwargs)
+        if review is not None:
+            return review
         if "授权" in str(kwargs.get("system_prompt") or ""):
             return {"decision": "approve", "confidence": 0.99, "reason": "明确同意"}
         if len(self.calls) == 1:
@@ -182,7 +193,7 @@ class QQOwnerAccessTests(unittest.TestCase):
             self.assertEqual(result.agent_status, "completed")
             prompt = str(runtime.calls[0].get("user_prompt") or "")
             self.assertIn("本地语义检索还要看索引覆盖率", prompt)
-            self.assertIn("仅用于私聊招呼", prompt)
+            self.assertIn("主人最近在桌面与 QQ 的共同对话", prompt)
 
     def test_private_handoff_context_is_never_added_to_group_greeting(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -216,10 +227,12 @@ class QQOwnerAccessTests(unittest.TestCase):
             self.assertNotIn("这句只说在私聊里", prompt)
             self.assertNotIn("临时群聊也不能带进群", prompt)
 
-    def test_history_needs_greeting_suppresses_both_volatile_and_retained_handoffs(self) -> None:
+    def test_history_needs_greeting_uses_fresh_sources_but_not_volatile_handoff(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
+            clock = [int(time.time())]
             memory = MemoryService(store=MemoryStore(Path(raw) / "memory.sqlite3"), router=MemoryRouter(),
-                policy=MemoryPolicy(master_user_ids=("master",), history_needs_enabled=True))
+                policy=MemoryPolicy(master_user_ids=("master",), history_needs_enabled=True),
+                clock=lambda: clock[0])
             memory.record_turn(conversation_id="group-1", conversation_type="group", message_id="old",
                 text="保留旧话题标记", metadata={"sender_id": "master", "shinku_involved": True})
             runtime = _SpeechRuntime({"speech": "嗯，我在。"})
@@ -229,8 +242,11 @@ class QQOwnerAccessTests(unittest.TestCase):
             for greeting in ("真红，在吗", "真红？"):
                 bridge.handle_turn(_turn("master", greeting))
                 prompt = str(runtime.calls[-1].get("user_prompt") or "")
-                self.assertNotIn("保留旧话题标记", prompt)
+                self.assertIn("保留旧话题标记", prompt)
                 self.assertNotIn("临时旧话题标记", prompt)
+            clock[0] += 301
+            bridge.handle_turn(_turn("master", "真红，在吗"))
+            self.assertNotIn("保留旧话题标记", str(runtime.calls[-1].get("user_prompt") or ""))
 
     def test_required_owner_gate_fails_closed_when_owner_ids_are_missing(self) -> None:
         runtime = _ToolThenSpeechRuntime()

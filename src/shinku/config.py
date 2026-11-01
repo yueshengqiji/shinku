@@ -46,18 +46,6 @@ class Settings:
         suffix = names.LOG_ERROR_SUFFIX if error else names.LOG_SUFFIX
         return self.log_root / f"{service}{suffix}"
 
-    def service_token_value(self, environ: Mapping[str, str] | None = None) -> str:
-        """解析服务令牌：直接值优先，其次读令牌文件。都没有则返回空串。"""
-
-        if self.service_token:
-            return self.service_token
-        if self.service_token_file:
-            path = Path(self.service_token_file)
-            if path.is_file():
-                return path.read_text(encoding="utf-8").strip()
-        return ""
-
-
 def load_project_env(
     environ: MutableMapping[str, str] | None = None,
     *,

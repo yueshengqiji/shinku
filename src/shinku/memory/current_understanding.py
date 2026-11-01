@@ -15,7 +15,7 @@ from typing import Any
 from .source_reader import MemorySourceReader
 from .lifecycle import sensitive
 
-VERSION = "explicit-current-view-v3"
+VERSION = "explicit-current-view-v4"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_current_keys (
  record_id TEXT PRIMARY KEY, scope TEXT NOT NULL, source_hash TEXT NOT NULL,
@@ -26,40 +26,59 @@ CREATE INDEX IF NOT EXISTS idx_memory_current_keys_scope ON memory_current_keys(
 _INDIRECT = re.compile(r'他说|她说|听说|转述|据说|假如|假设|如果|比如|也许|可能|猜测|建议|你说|[“”"「」]')
 _CONDITIONS = re.compile(r"工作时|休息时|平时|这周|本周|今天|暂时|只在[^，。；;]{1,20}(?:里|时)")
 _TEMPORAL = re.compile(r"这周|本周|上周|下周|今天|明天|昨天|暂时|最近|近期|这几天|这个月|本月|上个月|下个月|今年|明年|\d{1,2}月\d{1,2}(?:日|号)?")
+_ACTIVITY = re.compile(r"(?:工作|办公|学习|阅读|休息|写(?:报告|材料|文章|长篇文章)|写作)(?:的时候|时)")
+_PERSONAL_IF = re.compile(r"^如果我[^，。；;？！?]{1,24}[，,](?:我)?(?:就)?")
 _TOPICS = (
     ("diet:香菜", ("香菜",)), ("diet:辣", ("辣",)),
     ("diet:川菜", ("川菜",)), ("diet:面食", ("面食",)),
     ("drink:咖啡", ("咖啡",)), ("drink:选茶", ("喝茶", "红茶", "绿茶", "乌龙茶")),
     ("environment:噪声", ("环境", "安静", "热闹", "噪声")),
-    ("environment:背景音乐", ("背景音乐",)),
+    ("environment:背景音乐", ("背景音乐", "轻音乐", "音乐", "背景声音")),
 )
 
 
 def claims(record: Any) -> list[dict[str, Any]]:
+    """从本人来源读取有限偏好词汇，保留整句条件，不判断条件已经成立。
+
+    “如果我…”仅在明确保存的偏好中作为条件解析；普通假设、引用和未知
+    作者仍不产生当前理解。派生版本变化只触发重建，不改原文或确认状态。
+    """
     meta = record.metadata
     author = str(meta.get("sender_id") or "").strip()
     body = record.text.strip()
-    if meta.get("role") != "user" or not author or _INDIRECT.search(body) or sensitive(body):
-        return []
-    if not re.match(r"^(?:我|本人|工作时我|休息时我|平时我|这周我|本周我|今天我)", body):
-        return []
     confirmed = record.layer == "fact" and meta.get("confirmation_kind") == "explicit_memory_request"
+    personal_if = _PERSONAL_IF.match(body) if confirmed else None
+    indirect_body = body.removeprefix("如果") if personal_if else body
+    if meta.get("role") != "user" or not author or _INDIRECT.search(indirect_body) or sensitive(body):
+        return []
+    activity = _ACTIVITY.match(body)
+    if not (re.match(r"^(?:我|本人|工作时我|休息时我|平时我|这周我|本周我|今天我)", body)
+            or activity and body[activity.end():].startswith("我") or personal_if):
+        return []
     if record.layer == "fact" and not confirmed:
         return []  # Legacy/third-party facts do not acquire new confirmation.
-    conditions = _CONDITIONS.findall(body) + _TEMPORAL.findall(body)
-    condition = "、".join(dict.fromkeys(conditions))
-    # Relative/temporary expressions are not promoted to permanent constraints.
-    temporal_uncertain = bool(_TEMPORAL.search(body))
+    # 仅在分号后明确重新给出本人/活动条件时拆分；否则保留整句，避免把
+    # “这周不吃辣；也不喝咖啡”后半句误标成永久约束。原文始终完整交付。
+    segments = [part.strip() for part in re.split(r"[；;]", body) if part.strip()]
+    if not all(re.match(r"^(?:我|本人|平时|这周|本周|今天)", part) or _ACTIVITY.match(part)
+               or confirmed and _PERSONAL_IF.match(part) for part in segments):
+        segments = [body]
     found = []
-    for attribute, terms in _TOPICS:
-        if not any(term in body for term in terms):
-            continue
-        found.append({"subject": "user:" + author, "attribute": attribute,
-                      "value": body, "condition": condition,
-                      "confirmation": "explicit_memory_request" if confirmed else "unconfirmed_observation",
-                      "temporal_status": "needs_time_resolution" if temporal_uncertain else "not_specified",
-                      "valid_from": None, "valid_until": None,
-                      "corrected_at": meta.get("corrected_at") if meta.get("correction_confirmation") == "explicit" else None})
+    for segment in segments:
+        conditions = _CONDITIONS.findall(segment) + _TEMPORAL.findall(segment) + _ACTIVITY.findall(segment)
+        if _PERSONAL_IF.match(segment):
+            conditions.append(re.split(r"[，,]", segment, maxsplit=1)[0])
+        condition = "、".join(dict.fromkeys(conditions))
+        temporal_uncertain = bool(_TEMPORAL.search(segment))
+        for attribute, terms in _TOPICS:
+            if not any(term in segment for term in terms):
+                continue
+            found.append({"subject": "user:" + author, "attribute": attribute,
+                          "value": body, "condition": condition, "condition_text": segment,
+                          "confirmation": "explicit_memory_request" if confirmed else "unconfirmed_observation",
+                          "temporal_status": "needs_time_resolution" if temporal_uncertain else "not_specified",
+                          "valid_from": None, "valid_until": None,
+                          "corrected_at": meta.get("corrected_at") if meta.get("correction_confirmation") == "explicit" else None})
     return found[:8]
 
 

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from typing import Any
+import threading
+import time
+from datetime import datetime, timezone
+from ..qq.napcat import NapCatHttpActionCaller
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -10,8 +14,43 @@ from fastapi.responses import JSONResponse
 __all__ = ["build_qq_diagnostics_router"]
 
 
-def build_qq_diagnostics_router(*, napcat_host: Any = None, napcat_config: Any = None) -> APIRouter:
+def build_qq_diagnostics_router(*, napcat_host: Any = None, napcat_config: Any = None, assembly: Any = None) -> APIRouter:
     router = APIRouter()
+    # 连接探测与纯装配自检分开；单实例锁与短缓存限制并发轮询，不调用模型或发送消息。
+    cache = {}
+    lock = threading.Lock()
+
+    @router.get("/api/qq/connection", response_model=None)
+    def connection(request: Request) -> JSONResponse:
+        if not _local_only(request):
+            return _forbidden()
+        with lock:
+            now = time.monotonic()
+            if now >= cache.get("expires", 0):
+                payload = {"ok": True, "status": "unconfigured"}
+                if napcat_host is not None and napcat_config is not None and not napcat_config.validate():
+                    payload["status"] = "unavailable"
+                    try:
+                        caller = NapCatHttpActionCaller(napcat_config.base_url,
+                            access_token=napcat_config.token_value(), timeout=2)
+                        status = caller(action="get_status", params={})
+                        login = caller(action="get_login_info", params={})
+                        valid = all(item.get("status") == "ok" and item.get("retcode") == 0
+                                    and isinstance(item.get("data"), dict) for item in (status, login))
+                        if valid:
+                            account = str(login["data"].get("user_id") or "")
+                            bots = getattr(getattr(assembly, "bridge", None), "bot_ids", ())
+                            payload["status"] = ("account_mismatch" if not account or account not in bots
+                                else "online" if status["data"].get("online") is True else "offline")
+                    except Exception:
+                        # 请求错误可能带 token/地址；前端只获得稳定状态，不返回任意异常文本。
+                        pass
+                payload["observed_at"] = datetime.now(timezone.utc).isoformat()
+                cache.update(payload=payload, expires=time.monotonic() + 10)
+            result = dict(cache["payload"])
+        ingress = getattr(napcat_host, "ingress", None)
+        result["received_events"] = len(getattr(ingress, "_seen_event_fingerprints", {}) or {})
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/qq/napcat/status", response_model=None)
     def napcat_status(request: Request) -> JSONResponse:

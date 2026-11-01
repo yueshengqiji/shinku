@@ -1,4 +1,5 @@
 from __future__ import annotations
+from reply_review_fixture import dialogue_review_result
 
 import unittest
 
@@ -178,7 +179,34 @@ class ChatFlowTests(unittest.TestCase):
         third = _turn("现在好多了", message_id="m-3")
         decision = controller.begin_turn(third)
         self.assertIn("同类开场", decision.habit_guidance)
-        self.assertIn("自然换一种开头", decision.habit_guidance)
+        self.assertIn("无须为了变化而换词", decision.habit_guidance)
+
+    def test_soft_ack_keeps_original_reply_and_does_not_imply_hearing_failure(self) -> None:
+        controller = ChatFlowController()
+        first = _turn("下午没课了", message_id="m-soft-1")
+        controller.begin_turn(first)
+        controller.finish_turn(first, final_text="嗯，下午有空了。", expanded=False, reply_message_ids=("r-soft-1",))
+        second = _turn("想一起看电影", message_id="m-soft-2")
+        decision = controller.begin_turn(second)
+        self.assertEqual(decision.habit_guidance, "")
+        self.assertIn("嗯，下午有空了。", decision.previous_exchange)
+        controller.finish_turn(second, final_text="……嗯。一起看吧。", expanded=False, reply_message_ids=("r-soft-2",))
+        third = _turn("那就看上次那部", message_id="m-soft-3")
+        decision = controller.begin_turn(third)
+        self.assertIn("具体内容", decision.habit_guidance)
+        self.assertIn("仍可自然保留", decision.habit_guidance)
+        self.assertIn("无须为了变化而换词", decision.habit_guidance)
+        self.assertNotIn("再说一遍", decision.habit_guidance)
+        self.assertNotIn("没接好", decision.habit_guidance)
+        self.assertIn("……嗯。一起看吧。", decision.previous_exchange)
+
+    def test_agreement_is_not_a_new_banned_opening(self) -> None:
+        controller = ChatFlowController()
+        for index in range(3):
+            turn = _turn("这样更清楚", message_id=f"m-agree-{index}")
+            decision = controller.begin_turn(turn)
+            self.assertEqual(decision.habit_guidance, "")
+            controller.finish_turn(turn, final_text="确实，这样更清楚。", expanded=False)
 
     def test_recent_companionship_and_physical_limit_are_not_repeated_on_ellipsis(self) -> None:
         clock = _Clock()
@@ -253,8 +281,8 @@ class ChatFlowTests(unittest.TestCase):
         clock.value += 2
         third = _turn("那现在怎么办", message_id="m-3")
         decision = controller.begin_turn(third)
-        self.assertIn("重复使用同类开场", decision.habit_guidance)
-        self.assertIn("自然换一种开头", decision.habit_guidance)
+        self.assertIn("同类开场", decision.habit_guidance)
+        self.assertIn("无须为了变化而换词", decision.habit_guidance)
 
     def test_listening_ack_gets_a_one_turn_nudge_across_topic_switch(self) -> None:
         clock = _Clock()
@@ -307,6 +335,9 @@ class ChatFlowTests(unittest.TestCase):
 
             def call_chat_json(self, **kwargs):
                 self.calls.append(kwargs)
+                review = dialogue_review_result(kwargs)
+                if review is not None:
+                    return review
                 return {"speech": next(self.responses)}
 
         runtime = Runtime()
@@ -329,8 +360,11 @@ class ChatFlowTests(unittest.TestCase):
             "周六早一点出发会清静些。",
             "好，晚点再看天气。",
         ])
-        second_prompt = "\n".join(runtime.calls[1]["system_extra_blocks"])
-        third_prompt = "\n".join(runtime.calls[2]["system_extra_blocks"])
+        self.assertEqual(len(runtime.calls), 3)
+        main_calls = [row for row in runtime.calls if not str(row.get("prompt_cache_key", "")).endswith(":dialogue-review:v5")]
+        self.assertEqual(len(main_calls), 3)
+        second_prompt = "\n".join(main_calls[1]["system_extra_blocks"])
+        third_prompt = "\n".join(main_calls[2]["system_extra_blocks"])
         self.assertIn("听到了/再说一遍", second_prompt)
         self.assertIn("不要再次声称没接好", second_prompt)
         self.assertNotIn("听到了/再说一遍", third_prompt)

@@ -33,6 +33,8 @@ _INLINE_CODE_RE = re.compile(r"`+[^`\n]+`+")
 _ATOMIC_RE = re.compile(_URL_RE.pattern + "|" + _INLINE_CODE_RE.pattern, re.IGNORECASE)
 _CODE_FENCE_RE = re.compile(r"(```[\s\S]*?```)")
 _PROTECTED_RE = re.compile(r"```[\s\S]*?```|" + _ATOMIC_RE.pattern, re.IGNORECASE)
+_ELLIPSIS_RE = re.compile(r"…{2,}")
+_QUOTED_RE = re.compile(r'"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|「[^」\n]*」|『[^』\n]*』')
 _FINAL_PERIOD_RE = re.compile(r"[。．.]+$")
 _DASH_RE = re.compile(r"[—―]{2,}")
 _CHALLENGE_CLOSER_RE = re.compile(r"(?:，|。|\s)+(?:说吧|你说呢)[？?。！!]?$")
@@ -145,7 +147,8 @@ class ReplyHost:
                 continue
             for line in (item.strip() for item in part.splitlines() if item.strip()):
                 for sentence in self._split_sentences(line):
-                    result.extend(self._split_overlong(sentence))
+                    for phrase in self._split_long_pauses(sentence):
+                        result.extend(self._split_overlong(phrase))
         return result or [text]
 
     @staticmethod
@@ -176,6 +179,28 @@ class ReplyHost:
         if current.strip():
             result.append(current.strip())
         return result
+
+    @staticmethod
+    def _split_long_pauses(text: str) -> list[str]:
+        """长句中已有的省略号可作气泡边界；不改字、不拆短迟疑或引用材料。
+
+        仅当整句至少 32 字、停顿两侧各有至少 8 字时使用该边界，避免把
+        “嗯……”或“你啊……”单独发出。链接、行内代码和引文中的省略号属于资料。
+        """
+        if len(text) < 32:
+            return [text]
+        protected = [(m.start(), m.end()) for pattern in (_ATOMIC_RE, _QUOTED_RE)
+                     for m in pattern.finditer(text)]
+        pieces, start = [], 0
+        for pause in _ELLIPSIS_RE.finditer(text):
+            if any(left <= pause.start() < right for left, right in protected):
+                continue
+            if len(text[start:pause.start()].strip()) < 8 or len(text[pause.end():].strip()) < 8:
+                continue
+            pieces.append(text[start:pause.end()].strip())
+            start = pause.end()
+        pieces.append(text[start:].strip())
+        return pieces
 
     def _split_overlong(self, text: str) -> list[str]:
         if len(text) <= self.max_segment_chars:

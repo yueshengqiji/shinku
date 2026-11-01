@@ -167,8 +167,11 @@ class AgentCompletionVerificationTests(unittest.TestCase):
         state = AgentState(
             transcript=[{"role": "user", "content": "修改系统文件 /etc/hosts"}]
         )
-        # 模型如实报告无法修改
-        self.assertTrue(verifier(state, "抱歉，由于权限不足，我无法修改该系统保护文件。"))
+        # 失败必须显式标记；自然语言不是当前任务状态的来源。
+        verdict = verifier.evaluate(state, "抱歉，由于权限不足，我无法修改该系统保护文件。", outcome="blocked")
+        self.assertTrue(verdict.accepted)
+        self.assertEqual(verdict.status, "blocked")
+        self.assertFalse(verdict.evidence[-1]["business_goal"])
 
     def test_failed_write_tool_does_not_satisfy_completion_claim(self) -> None:
         verifier = SmartCompletionVerifier(allowed_tool_names=["file_write"])
